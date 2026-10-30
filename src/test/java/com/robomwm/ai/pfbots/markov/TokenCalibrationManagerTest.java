@@ -113,10 +113,10 @@ class TokenCalibrationManagerTest {
         assertEquals(RoundRobinGenerativeAiResponder.CEREBRAS_INPUT_LIMIT,
                 RoundRobinGenerativeAiResponder.gatherBudgetForProviders(List.of(cerebras)));
 
-        // 250K Gemini budget is unfetchable in one prompt: capped.
+        // Gemini's 250K limit is below the 800K fetch ceiling.
         var gemini = new RoundRobinGenerativeAiResponder.Provider(
                 "Gemini", "https://gemini.example/chat", "gk", "gemini-2.5-flash", java.util.Map.of(), false);
-        assertEquals(RoundRobinGenerativeAiResponder.MAX_GATHER_BUDGET,
+        assertEquals(RoundRobinGenerativeAiResponder.GEMINI_INPUT_LIMIT,
                 RoundRobinGenerativeAiResponder.gatherBudgetForProviders(List.of(gemini)));
 
         // Unknown backends never constrain: fall back to fetch ceiling.

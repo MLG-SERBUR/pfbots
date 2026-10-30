@@ -59,7 +59,7 @@ ai:
   cloudflareModels:
     - "@cf/openai/gpt-oss-120b"
   ollamaModels:
-    - "minimax-m3"
+    - "beam"
     - "nemotron-3-ultra"
     - "gpt-oss:120b"
     - "gemma4:31b"

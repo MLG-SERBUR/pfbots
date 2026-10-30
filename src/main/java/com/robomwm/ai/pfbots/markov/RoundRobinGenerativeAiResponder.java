@@ -39,15 +39,16 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
     // per-request token cap published, so model context binds
     // (@cf/openai/gpt-oss-120b = 131K).
     static final int CLOUDFLARE_INPUT_LIMIT = 131072;
+    static final int OLLAMA_BEAM_INPUT_LIMIT = 800000;
     // Mistral free (Experiment), Ollama Cloud (GPU-time quotas) and OpenRouter
     // :free (model-dependent context) have no usable published per-request
-    // token number -> unknown (null), never constrain.
+    // token number -> unknown (null), except Ollama Beam.
     /**
      * Fetch ceiling for history gathering: file reads are cheap (no Matrix
      * pagination timeout), but prompts above this are unusable without a
      * gather rework. Also the default when no chain attempt has a known limit.
      */
-    static final int MAX_GATHER_BUDGET = 128000;
+    static final int MAX_GATHER_BUDGET = 800000;
     /** Headroom kept when trimming to a limit, so the retry fits under TPM/context. */
     static final double TRIM_HEADROOM_RATIO = 0.85;
     private final HttpClient client;
@@ -242,6 +243,7 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
             case "SambaNova": return SAMBANOVA_INPUT_LIMIT;
             case "ZAI": return ZAI_INPUT_LIMIT;
             case "Cloudflare": return CLOUDFLARE_INPUT_LIMIT;
+            case "Ollama": return "beam".equalsIgnoreCase(provider.model()) ? OLLAMA_BEAM_INPUT_LIMIT : null;
             default: return null;
         }
     }
@@ -390,11 +392,25 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
 
     static List<Provider> buildProviders(GenerativeAiConfig config) {
         List<Provider> providers = new ArrayList<>();
-        // Provider/model order mirrors matrix-robobot AIService.buildProviderAttempts order, excluding ArliAI.
+        // Ollama Cloud is first; remaining provider order mirrors matrix-robobot, excluding ArliAI.
         // Matrix order: GROQ, ARLIAI, OLLAMA_PROXY, FREELLM, CEREBRAS, GEMINI, MISTRAL, CLOUDFLARE, OLLAMA_CLOUD, ZAI, SAMBANOVA, OPENROUTER
         // pfbots mapping (ArliAI excluded, OllamaProxy/FreeLLM not present):
-        // GROQ -> Groq, CEREBRAS -> Cerebras, GEMINI -> Gemini, MISTRAL -> Mistral, CLOUDFLARE -> Cloudflare,
-        // OLLAMA_CLOUD -> Ollama, ZAI -> ZAI, SAMBANOVA -> SambaNova, OPENROUTER -> OpenRouter (last, free models only)
+        // OLLAMA_CLOUD -> Ollama, GROQ -> Groq, CEREBRAS -> Cerebras, GEMINI -> Gemini, MISTRAL -> Mistral,
+        // CLOUDFLARE -> Cloudflare, ZAI -> ZAI, SAMBANOVA -> SambaNova, OPENROUTER -> OpenRouter (last, free models only)
+        if (hasText(config.ollamaApiKey())) {
+            List<String> ms = models(config.ollamaModels());
+            if (!ms.isEmpty()) {
+                for (String model : ms) {
+                    providers.add(new Provider(
+                            "Ollama",
+                            "https://ollama.com/v1/chat/completions",
+                            config.ollamaApiKey(),
+                            model,
+                            Map.of(),
+                            false));
+                }
+            }
+        }
         if (hasText(config.groqApiKey())) {
             List<String> ms = models(config.groqModels());
             if (ms.isEmpty()) {
@@ -462,20 +478,6 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
                             "https://api.cloudflare.com/client/v4/accounts/" + config.cloudflareAccountId()
                                     + "/ai/v1/chat/completions",
                             config.cloudflareApiKey(),
-                            model,
-                            Map.of(),
-                            false));
-                }
-            }
-        }
-        if (hasText(config.ollamaApiKey())) {
-            List<String> ms = models(config.ollamaModels());
-            if (!ms.isEmpty()) {
-                for (String model : ms) {
-                    providers.add(new Provider(
-                            "Ollama",
-                            "https://ollama.com/v1/chat/completions",
-                            config.ollamaApiKey(),
                             model,
                             Map.of(),
                             false));

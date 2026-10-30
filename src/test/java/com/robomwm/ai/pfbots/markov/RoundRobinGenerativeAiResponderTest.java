@@ -267,16 +267,19 @@ class RoundRobinGenerativeAiResponderTest {
                 List.of("mistral-model"),
                 List.of("zai-model"),
                 List.of("@cf/openai/gpt-oss-120b"),
-                List.of("gpt-oss:120b"),
+                List.of("beam"),
                 List.of("gpt-oss-120b"),
                 List.of("Qwen3.5-27B-Derestricted"));
 
         List<RoundRobinGenerativeAiResponder.Provider> providers = RoundRobinGenerativeAiResponder.buildProviders(config);
 
-        // Expected order: Groq, Cerebras, Gemini, Mistral, Cloudflare, Ollama, ZAI, SambaNova, OpenRouter
+        // Ollama Cloud is first; remaining providers retain their configured fallback order.
         // ArliAI excluded from main responder
         List<String> actualOrder = providers.stream().map(RoundRobinGenerativeAiResponder.Provider::displayName).toList();
-        assertEquals(List.of("Groq", "Cerebras", "Gemini", "Mistral", "Cloudflare", "Ollama", "ZAI", "SambaNova", "OpenRouter"), actualOrder);
+        assertEquals(List.of("Ollama", "Groq", "Cerebras", "Gemini", "Mistral", "Cloudflare", "ZAI", "SambaNova", "OpenRouter"), actualOrder);
+        assertEquals("beam", providers.get(0).model());
+        assertEquals(800000, RoundRobinGenerativeAiResponder.knownInputLimitForProvider(providers.get(0)));
+        assertEquals(800000, RoundRobinGenerativeAiResponder.gatherBudgetForProviders(providers));
         assertFalse(actualOrder.contains("ArliAI"));
     }
 

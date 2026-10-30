@@ -47,7 +47,7 @@ public record GenerativeAiConfig(
                         "mistral-small-latest", "codestral-latest", "open-mistral-nemo", "ministral-8b-latest"),
                 List.of("glm-4.7-flash", "glm-4.5-flash"),
                 List.of("@cf/openai/gpt-oss-120b"),
-                List.of("minimax-m3", "nemotron-3-ultra", "gpt-oss:120b", "gemma4:31b"),
+                List.of("beam", "nemotron-3-ultra", "gpt-oss:120b", "gemma4:31b"),
                 List.of("DeepSeek-V3.1", "gpt-oss-120b", "Meta-Llama-3.3-70B-Instruct"),
                 List.of("Qwen3.5-27B-Derestricted"));
     }
