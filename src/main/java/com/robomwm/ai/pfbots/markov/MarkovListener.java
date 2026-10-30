@@ -55,7 +55,7 @@ public class MarkovListener extends ListenerAdapter {
     private static final double RESPONSE_DAMPENING_STEP = 0.1;
     private static final double MIN_RESPONSE_CHANCE = 0.0;
     public static final long GENERATIVE_AI_TOKEN_BUDGET = 8000;
-    private static final long GENERATIVE_AI_TIMEOUT_SECONDS = 15;
+    private static final long GENERATIVE_AI_TIMEOUT_SECONDS = 45;
 
     /**
      * Initial history-gather budget for a responder chain: the known input

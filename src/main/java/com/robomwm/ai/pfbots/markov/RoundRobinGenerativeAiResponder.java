@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
-    private static final int REQUEST_TIMEOUT_SECONDS = 25;
+    private static final int REQUEST_TIMEOUT_SECONDS = 45;
     private static final long GROQ_TOKEN_BUDGET = 8000;
     /** Observed Groq input-tokens-per-minute limits: qwen models get ~7k, gpt ~8k. */
     static final int GROQ_QWEN_IPTM_LIMIT = 7000;
