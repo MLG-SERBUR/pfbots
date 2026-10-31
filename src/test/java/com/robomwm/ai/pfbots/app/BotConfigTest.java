@@ -7,7 +7,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -28,16 +27,19 @@ class BotConfigTest {
     }
 
     @Test
-    void emptyCerebrasModelsStaysEmpty() throws IOException {
+    void modelKeysInYamlAreIgnoredModelsLiveInCode() throws IOException {
         BotConfig config = BotConfig.load(writeConfig("""
                     cerebrasApiKey: "ck"
                     groqApiKey: "gk"
-                    cerebrasModels: []
+                    cerebrasModels:
+                      - "yaml-cerebras"
                     groqModels:
-                      - "gm"
+                      - "yaml-groq"
                 """));
 
-        assertEquals(List.of(), config.generativeAiConfig().cerebrasModels());
+        // Models are defined in code, never in yaml.
+        assertEquals(GenerativeAiConfig.CEREBRAS_MODELS, config.generativeAiConfig().cerebrasModels());
+        assertEquals(GenerativeAiConfig.GROQ_MODELS, config.generativeAiConfig().groqModels());
     }
 
     @Test
@@ -82,7 +84,7 @@ class BotConfigTest {
 
         assertEquals("test-token", config.token());
         assertEquals("from-ai-file", config.generativeAiConfig().groqApiKey());
-        assertEquals(List.of("from-ai-model"), config.generativeAiConfig().groqModels());
+        assertEquals(GenerativeAiConfig.GROQ_MODELS, config.generativeAiConfig().groqModels());
     }
 
     @Test

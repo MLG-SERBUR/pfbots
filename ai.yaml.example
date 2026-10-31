@@ -16,6 +16,8 @@ ai:
   #   Ollama:     https://ollama.com/settings/keys     (free plan, no card)
   #   SambaNova:  https://cloud.sambanova.ai/apis      (free tier 20 req/day, no card)
   #   ArliAI:     https://arliai.com/                  (used for reaction selection, separate timeout)
+  #
+  # Models are configured in code (GenerativeAiConfig). YAML only stores secret tokens.
   cerebrasApiKey: ""
   groqApiKey: ""
   openrouterApiKey: ""
@@ -27,45 +29,3 @@ ai:
   ollamaApiKey: ""
   sambaNovaApiKey: ""
   arliApiKey: ""
-
-  cerebrasModels:
-    - "qwen-3-235b-a22b-instruct-2507"
-  groqModels:
-    - "openai/gpt-oss-120b"
-    - "qwen/qwen3.8-27b"
-    - "qwen/qwen3.6-27b"
-    - "openai/gpt-oss-20b"
-  openrouterModels:
-    - "z-ai/glm-4.5-air:free"
-    - "nvidia/nemotron-3-super-120b-a12b:free"
-  geminiModels:
-    - "gemini-3.7-flash"
-    - "gemini-3.6-flash"
-    - "gemini-3.5-flash"
-    - "gemini-2.5-flash"
-    - "gemini-2.5-flash-lite"
-    - "gemma-4-31b-it"
-  mistralModels:
-    - "mistral-large-latest"
-    - "mistral-medium-latest"
-    - "magistral-small-latest"
-    - "mistral-small-latest"
-    - "codestral-latest"
-    - "open-mistral-nemo"
-    - "ministral-8b-latest"
-  zaiModels:
-    - "glm-4.7-flash"
-    - "glm-4.5-flash"
-  cloudflareModels:
-    - "@cf/openai/gpt-oss-120b"
-  ollamaModels:
-    - "beam"
-    - "nemotron-3-ultra"
-    - "gpt-oss:120b"
-    - "gemma4:31b"
-  sambaNovaModels:
-    - "DeepSeek-V3.1"
-    - "gpt-oss-120b"
-    - "Meta-Llama-3.3-70B-Instruct"
-  arliModels:
-    - "Qwen3.5-27B-Derestricted"

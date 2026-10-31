@@ -116,7 +116,7 @@ public class BotMain {
                 continue;
             }
 
-            // Per-bot voice, shared provider backend (keys/models from ai.yaml).
+            // Per-bot voice, shared provider backend (keys from ai.yaml/env, models in code).
             RoundRobinGenerativeAiResponder generativeAiResponder =
                     new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
             ArliAiReactionResponder reactionResponder =

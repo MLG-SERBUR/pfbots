@@ -20,13 +20,13 @@ Java Discord bots (MasterOEBot, paraokabot) with JDA. MasterOEBot implements `/c
      paraoka: "YOUR_PARAOKA_BOT_TOKEN"
    ```
    A missing entry disables that bot without affecting the others.
-3. Edit `ai.yaml` and set your AI provider keys and models.
+3. Edit `ai.yaml` and set your AI provider keys.
 
 > Never commit `dumcord.yml` or `ai.yaml` with real secrets.
 
 AI replies use configured providers round-robin. Keys can live in `ai.yaml` or env vars:
-`CEREBRAS_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`.
-Use `cerebrasModels`, `groqModels`, and `openrouterModels` lists to cycle multiple models. Legacy `cerebrasModel` and `groqModel` still load.
+`CEREBRAS_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, etc.
+Models are configured in code (`GenerativeAiConfig`), so `ai.yaml` only holds secret keys/tokens.
 
 ## Discord setup (Developer Portal)
 1. Go to **https://discord.com/developers/applications**.
