@@ -62,14 +62,14 @@ public class MarkovListener extends ListenerAdapter {
     //   NEED_VISION: <attachment id>: <specific question about the image>
     // The question defaults to "Describe this image in detail" when omitted.
     // One vision round per reply max; the second text pass must not emit the marker again.
-    static final Pattern VISION_NEED_PATTERN = Pattern.compile("(?s)^\\s*NEED_VISION:\\s*(\\d+)(?::\\s*(.+))?\\s*$");
+    static final Pattern VISION_NEED_PATTERN = Pattern.compile("(?s)^\\s*NEED_VISION:\\s*(\\d+)(?::\\s*(.*))?\\s*$");
     static final String VISION_INSTRUCTION = """
             If the newest question needs detail from an attached image that is not in the text, reply with ONLY this line and nothing else: NEED_VISION: <image id>: <specific question about the image>.
             Attached images appear in history as [image id=<id> file=<name>].
             Never guess image content. If no image detail is needed, answer normally and never output NEED_VISION.""";
     static final String VISION_SYSTEM_PROMPT = "Answer only about the image provided. Describe only what is actually visible, never guess.";
     static final long MAX_IMAGE_BYTES = 10_000_000;
-    static final Set<String> VISION_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif");
+    static final Set<String> VISION_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif");
 
     /** Parsed NEED_VISION marker: which image, and what the text model wants to know. */
     record VisionNeed(String imageId, String question) {
@@ -81,7 +81,13 @@ public class MarkovListener extends ListenerAdapter {
 
     static VisionNeed parseVisionNeed(String reply) {
         if (reply == null) return null;
-        Matcher m = VISION_NEED_PATTERN.matcher(reply.trim());
+        String trimmed = reply.trim();
+        if (trimmed.startsWith("`") && trimmed.endsWith("`") && trimmed.length() >= 2) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1).trim();
+        } else if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length() >= 2) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1).trim();
+        }
+        Matcher m = VISION_NEED_PATTERN.matcher(trimmed);
         if (!m.matches()) return null;
         String question = m.group(2);
         return new VisionNeed(m.group(1), (question == null || question.isBlank()) ? "Describe this image in detail" : question.trim());
@@ -89,6 +95,33 @@ public class MarkovListener extends ListenerAdapter {
 
     static String imagePlaceholder(PendingImage image) {
         return "[image id=" + image.id() + " file=" + image.fileName() + "]";
+    }
+
+    static String formatMessageContentWithImages(String content, List<PendingImage> images) {
+        if (images == null || images.isEmpty()) {
+            return content == null ? "" : content;
+        }
+        StringBuilder sb = new StringBuilder(content == null ? "" : content);
+        for (PendingImage image : images) {
+            String placeholder = imagePlaceholder(image);
+            if (!sb.toString().contains(placeholder)) {
+                if (!sb.isEmpty()) sb.append(' ');
+                sb.append(placeholder);
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    static String injectReplyContext(String currentMessageLine, String context) {
+        if (currentMessageLine == null || context == null || context.isEmpty()) {
+            return currentMessageLine;
+        }
+        int tagEnd = currentMessageLine.indexOf("> ");
+        if (tagEnd != -1) {
+            return currentMessageLine.substring(0, tagEnd + 2) + context + currentMessageLine.substring(tagEnd + 2);
+        } else {
+            return context + currentMessageLine;
+        }
     }
 
     static List<PendingImage> imageAttachments(Message message) {
@@ -291,15 +324,7 @@ public class MarkovListener extends ListenerAdapter {
         List<PendingImage> images = imageAttachments(message);
         rememberImages(images);
         rememberImages(imageAttachments(message.getReferencedMessage()));
-        String logContent = content;
-        if (!images.isEmpty()) {
-            StringBuilder sb = new StringBuilder(logContent);
-            for (PendingImage image : images) {
-                if (!sb.isEmpty()) sb.append(' ');
-                sb.append(imagePlaceholder(image));
-            }
-            logContent = sb.toString().trim();
-        }
+        String logContent = formatMessageContentWithImages(content, images);
 
         if ((content.trim().isEmpty() && images.isEmpty()) || content.trim().startsWith("!")) {
             String author = message.getAuthor() != null ? message.getAuthor().getEffectiveName() : "unknown";
@@ -370,6 +395,16 @@ public class MarkovListener extends ListenerAdapter {
         if (responseAllowed) {
             if (directlyAddressed) {
                 System.out.println("Triggered reply in channel " + channelId + " for message '" + content + "' from " + message.getAuthor().getEffectiveName() + " isReplyToSelfSync=" + isReplyToSelfSync + " selfNamed=" + selfNamed + " otherNamed=" + otherNamed + " mentionsEveryone=" + mentionsEveryone);
+                MessageReference ref = message.getMessageReference();
+                if (ref != null && message.getReferencedMessage() == null) {
+                    ref.resolve().queue(referenced -> {
+                        rememberImages(imageAttachments(referenced));
+                        sendTriggeredReply(event, channelId, content, referenced);
+                    }, error -> {
+                        sendTriggeredReply(event, channelId, content, null);
+                    });
+                    return;
+                }
                 sendTriggeredReply(event, channelId, content, message.getReferencedMessage());
                 return;
             } else if (rand.nextDouble() < 0.001) {
@@ -521,23 +556,30 @@ public class MarkovListener extends ListenerAdapter {
         List<String> recentMessages = manager.getRecentMessagesForAiUntilTokenBudget(channelId, gatherBudgetFor(generativeAiResponder), systemPrompt);
 
         if (referencedMessage != null && !recentMessages.isEmpty()) {
-            String referencedContent = MarkovUtils.getDisplayNameContent(referencedMessage);
-            String formattedReferenced = botTag + referencedContent;
+            List<PendingImage> refImages = imageAttachments(referencedMessage);
+            rememberImages(refImages);
 
-            boolean isReferencingLastMessage = recentMessages.size() >= 2
-                    && recentMessages.get(recentMessages.size() - 2).equals(formattedReferenced);
+            String rawReferencedContent = MarkovUtils.getDisplayNameContent(referencedMessage);
+            String referencedContent = formatMessageContentWithImages(rawReferencedContent, refImages);
+
+            String repliedAuthor;
+            if (referencedMessage.getMember() != null) {
+                repliedAuthor = referencedMessage.getMember().getEffectiveName();
+            } else if (referencedMessage.getAuthor() != null) {
+                repliedAuthor = referencedMessage.getAuthor().getEffectiveName();
+            } else {
+                repliedAuthor = liveBotDisplayName(event.getGuild());
+            }
+
+            String expectedTag = "<" + repliedAuthor + "> ";
+            boolean isReferencingLastMessage = refImages.isEmpty()
+                    && recentMessages.size() >= 2
+                    && recentMessages.get(recentMessages.size() - 2).equals(expectedTag + referencedContent);
 
             if (!isReferencingLastMessage) {
                 String currentMessageLine = recentMessages.get(recentMessages.size() - 1);
-                String context = "(replying to " + liveBotDisplayName(event.getGuild()) + ": \"" + referencedContent + "\") ";
-
-                int tagEnd = currentMessageLine.indexOf("> ");
-                if (tagEnd != -1) {
-                    String updated = currentMessageLine.substring(0, tagEnd + 2) + context + currentMessageLine.substring(tagEnd + 2);
-                    recentMessages.set(recentMessages.size() - 1, updated);
-                } else {
-                    recentMessages.set(recentMessages.size() - 1, context + currentMessageLine);
-                }
+                String context = "(replying to " + repliedAuthor + ": \"" + referencedContent + "\") ";
+                recentMessages.set(recentMessages.size() - 1, injectReplyContext(currentMessageLine, context));
             }
         }
 
@@ -583,6 +625,7 @@ public class MarkovListener extends ListenerAdapter {
                     // Marker is internal only: never sent to the channel or logged.
                     VisionNeed need = parseVisionNeed(safeReply);
                     if (need != null) {
+                        System.out.println("AI requested vision for image id=" + need.imageId() + " question='" + need.question() + "'");
                         runVisionLoop(event, channelId, content, recentMessages, systemPrompt, need);
                         return;
                     }
@@ -618,11 +661,16 @@ public class MarkovListener extends ListenerAdapter {
             sendImmediateSeededMarkovReply(event, channelId, content);
             return;
         }
+        System.out.println("Vision loop: downloading image " + image.id() + " (" + image.fileName() + ", " + image.size() + " bytes)...");
         AtomicReference<String> visionAnswerRef = new AtomicReference<>();
         downloadImage(image)
                 .thenCompose(bytes -> {
-                    String mime = image.contentType() != null && !image.contentType().isBlank()
-                            ? image.contentType() : "image/png";
+                    String rawType = image.contentType();
+                    String mime = (rawType == null || rawType.isBlank()) ? "image/png" : rawType.toLowerCase(Locale.ROOT).split(";")[0].trim();
+                    if ("image/jpg".equalsIgnoreCase(mime)) {
+                        mime = "image/jpeg";
+                    }
+                    System.out.println("Vision loop: sending " + bytes.length + " bytes (" + mime + ") to vision responder with prompt='" + need.question() + "'...");
                     return visionResponder.generateReply(new GenerativeAiRequest(
                             List.of(need.question()), VISION_SYSTEM_PROMPT,
                             List.of(new VisionImage(Base64.getEncoder().encodeToString(bytes), mime))));
@@ -632,6 +680,7 @@ public class MarkovListener extends ListenerAdapter {
                         return CompletableFuture.failedFuture(new IllegalStateException("Vision responder returned empty answer"));
                     }
                     visionAnswerRef.set(visionAnswer.trim());
+                    System.out.println("Vision loop: vision responder answered (" + visionAnswer.trim().length() + " chars). Running final text generation...");
                     List<String> finalMessages = new ArrayList<>(recentMessages);
                     finalMessages.add("[vision detail for image " + need.imageId() + "]: " + visionAnswer.trim());
                     String finalPrompt = (systemPrompt == null ? "" : systemPrompt)
@@ -673,7 +722,9 @@ public class MarkovListener extends ListenerAdapter {
         if (image.size() > MAX_IMAGE_BYTES) {
             return CompletableFuture.failedFuture(new IllegalStateException("Image " + image.id() + " exceeds " + MAX_IMAGE_BYTES + " bytes"));
         }
-        if (image.contentType() != null && !image.contentType().isBlank() && !VISION_MIME_TYPES.contains(image.contentType())) {
+        String rawType = image.contentType();
+        String normalizedType = (rawType == null || rawType.isBlank()) ? null : rawType.toLowerCase(Locale.ROOT).split(";")[0].trim();
+        if (normalizedType != null && !VISION_MIME_TYPES.contains(normalizedType)) {
             return CompletableFuture.failedFuture(new IllegalStateException("Image " + image.id() + " type " + image.contentType() + " is not supported for vision"));
         }
         HttpRequest request = HttpRequest.newBuilder()
@@ -1060,15 +1111,18 @@ public class MarkovListener extends ListenerAdapter {
             for (int i = messages.size() - 1; i >= 0; i--) {
                 Message msg = messages.get(i);
                 String content = MarkovUtils.getDisplayNameContent(msg).trim();
-                if (!content.isEmpty() && !ProfanityFilter.containsProfanity(content)) {
+                List<PendingImage> imgs = imageAttachments(msg);
+                rememberImages(imgs);
+                String formatted = formatMessageContentWithImages(content, imgs);
+                if (!formatted.isEmpty() && !ProfanityFilter.containsProfanity(formatted)) {
                     if (msg.getAuthor().getIdLong() == jda.getSelfUser().getIdLong()) {
-                        manager.appendBotMessageToAiLog(channelId, content, botTag);
-                        manager.appendBotMessageToChatLog(channelId, content, botTag);
+                        manager.appendBotMessageToAiLog(channelId, formatted, botTag);
+                        manager.appendBotMessageToChatLog(channelId, formatted, botTag);
                         channelsNeedingScrub.add(channelId);
                     } else {
                         String authorName = msg.getMember() != null ? msg.getMember().getEffectiveName() : msg.getAuthor().getEffectiveName();
-                        manager.appendToAiLog(channelId, authorName, content);
-                        manager.appendToChatLog(channelId, authorName, content);
+                        manager.appendToAiLog(channelId, authorName, formatted);
+                        manager.appendToChatLog(channelId, authorName, formatted);
                     }
                 }
             }

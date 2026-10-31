@@ -53,6 +53,21 @@ class VisionOnDemandTest {
         MarkovListener.VisionNeed need = MarkovListener.parseVisionNeed("NEED_VISION: 12345");
         assertEquals("12345", need.imageId());
         assertEquals("Describe this image in detail", need.question());
+
+        MarkovListener.VisionNeed needTrailingColon = MarkovListener.parseVisionNeed("NEED_VISION: 12345:");
+        assertEquals("12345", needTrailingColon.imageId());
+        assertEquals("Describe this image in detail", needTrailingColon.question());
+    }
+
+    @Test
+    void parseVisionNeedToleratesQuotesAndBackticks() {
+        MarkovListener.VisionNeed backticks = MarkovListener.parseVisionNeed("`NEED_VISION: 999: what is this?`");
+        assertEquals("999", backticks.imageId());
+        assertEquals("what is this?", backticks.question());
+
+        MarkovListener.VisionNeed quotes = MarkovListener.parseVisionNeed("\"NEED_VISION: 888: describe color\"");
+        assertEquals("888", quotes.imageId());
+        assertEquals("describe color", quotes.question());
     }
 
     @Test
@@ -67,5 +82,30 @@ class VisionOnDemandTest {
     void imagePlaceholderCarriesIdForMarker() {
         MarkovListener.PendingImage image = new MarkovListener.PendingImage("12345", "pic.png", "image/png", 100, "https://example.invalid/pic.png");
         assertEquals("[image id=12345 file=pic.png]", MarkovListener.imagePlaceholder(image));
+    }
+
+    @Test
+    void formatMessageContentWithImages() {
+        MarkovListener.PendingImage image = new MarkovListener.PendingImage("123", "comic.png", "image/png", 100, "url");
+        // Image only
+        assertEquals("[image id=123 file=comic.png]", MarkovListener.formatMessageContentWithImages("", java.util.List.of(image)));
+        assertEquals("[image id=123 file=comic.png]", MarkovListener.formatMessageContentWithImages(null, java.util.List.of(image)));
+
+        // Text + image
+        assertEquals("Thoughts? [image id=123 file=comic.png]", MarkovListener.formatMessageContentWithImages("Thoughts?", java.util.List.of(image)));
+
+        // No duplication if placeholder already present
+        assertEquals("Thoughts? [image id=123 file=comic.png]", MarkovListener.formatMessageContentWithImages("Thoughts? [image id=123 file=comic.png]", java.util.List.of(image)));
+
+        // Empty images list
+        assertEquals("hello", MarkovListener.formatMessageContentWithImages("hello", java.util.List.of()));
+    }
+
+    @Test
+    void injectReplyContextWithImagePlaceholder() {
+        String line = "<🐧> @MasterOEbot can you read this image, what does it say?";
+        String context = "(replying to MasterOE: \"Thoughts? [image id=123 file=reading_order.png]\") ";
+        String injected = MarkovListener.injectReplyContext(line, context);
+        assertEquals("<🐧> (replying to MasterOE: \"Thoughts? [image id=123 file=reading_order.png]\") @MasterOEbot can you read this image, what does it say?", injected);
     }
 }
