@@ -1,6 +1,7 @@
 package com.robomwm.ai.pfbots.markov;
 
 import java.util.List;
+import java.util.Set;
 
 public record GenerativeAiConfig(
         String cerebrasApiKey,
@@ -73,6 +74,44 @@ public record GenerativeAiConfig(
     public static final List<String> ARLI_MODELS = List.of(
             "Qwen3.5-27B-Derestricted"
     );
+
+    /**
+     * Model ids (exact strings from the lists above) that accept image input.
+     * Checked against provider docs Oct 2026; a false entry is survivable
+     * (the vision responder falls back to the next vision provider), a
+     * missing entry means that model is never tried for vision.
+     * Vision: all Gemini Flash/Gemma 4 (natively multimodal), Groq
+     * qwen/qwen3.8-27b (Groq docs: its only multimodal self-serve model),
+     * Mistral large/medium/small/magistral-small/ministral-8b latest
+     * (current general-purpose Mistral models take image input), Ollama
+     * gemma4:31b (multimodal Gemma 4).
+     * Not vision: beam (text-in, text-out), gpt-oss (all providers),
+     * nemotron-3-ultra (the Omni variant is the multimodal one),
+     * DeepSeek-V3.1, Meta-Llama-3.3-70B, glm-*-flash (text only; the
+     * vision GLMs are the -v variants, not in this config), codestral
+     * (code), open-mistral-nemo (text only), openrouter/free (routing
+     * is unknown, so vision is not deterministic), Arli Qwen3.5 (text).
+     */
+    public static final Set<String> VISION_MODELS = Set.of(
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemma-4-31b-it",
+            "qwen/qwen3.8-27b",
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "magistral-small-latest",
+            "mistral-small-latest",
+            "ministral-8b-latest",
+            "gemma4:31b"
+    );
+
+    public static boolean supportsVision(String model) {
+        return model != null && VISION_MODELS.contains(model);
+    }
 
     public GenerativeAiConfig(
             String cerebrasApiKey,

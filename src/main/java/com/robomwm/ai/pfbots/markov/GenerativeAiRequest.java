@@ -4,9 +4,14 @@ import java.util.List;
 
 public record GenerativeAiRequest(
         List<String> recentMessages,
-        String systemPromptOverride
+        String systemPromptOverride,
+        List<VisionImage> images
 ) {
     public GenerativeAiRequest(List<String> recentMessages) {
-        this(recentMessages, null);
+        this(recentMessages, null, List.of());
+    }
+
+    public GenerativeAiRequest(List<String> recentMessages, String systemPromptOverride) {
+        this(recentMessages, systemPromptOverride, List.of());
     }
 }

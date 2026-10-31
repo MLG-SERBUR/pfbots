@@ -60,6 +60,32 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
         this(HttpClient.newHttpClient(), buildProviders(config), systemPrompt);
     }
 
+    /** Vision-only responder: vision models only, Gemini first (fast, free-tier, multimodal). */
+    public static RoundRobinGenerativeAiResponder visionResponder(GenerativeAiConfig config) {
+        return new RoundRobinGenerativeAiResponder(HttpClient.newHttpClient(), visionProviders(config),
+                "Answer only about the image provided. Describe only what is actually visible, never guess.");
+    }
+
+    /** Full provider chain filtered to vision models, in vision-preference order. */
+    static List<Provider> visionProviders(GenerativeAiConfig config) {
+        List<Provider> vision = new ArrayList<>(buildProviders(config).stream()
+                .filter(p -> GenerativeAiConfig.supportsVision(p.model()))
+                .toList());
+        // Stable sort: Gemini, Groq, Mistral, Ollama, anything else last.
+        vision.sort((a, b) -> Integer.compare(visionPriority(a.displayName()), visionPriority(b.displayName())));
+        return vision;
+    }
+
+    private static int visionPriority(String displayName) {
+        return switch (displayName) {
+            case "Gemini" -> 0;
+            case "Groq" -> 1;
+            case "Mistral" -> 2;
+            case "Ollama" -> 3;
+            default -> 4;
+        };
+    }
+
     public RoundRobinGenerativeAiResponder(HttpClient client, List<Provider> providers, String systemPrompt) {
         this.client = client;
         this.providers = List.copyOf(providers);
@@ -155,15 +181,31 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
     private HttpRequest buildRequest(Provider provider, GenerativeAiRequest request, String reasoningEffort) {
         String effectiveSystemPrompt = request.systemPromptOverride() == null ? systemPrompt : request.systemPromptOverride();
         List<String> cappedMessages = capForSmallContextProvider(provider, request.recentMessages(), effectiveSystemPrompt);
+        DataObject userMessage = DataObject.empty().put("role", "user");
+        if (request.images() == null || request.images().isEmpty()) {
+            userMessage.put("content", String.join("\n", cappedMessages));
+        } else {
+            // OpenAI-compatible content parts: same shape for Gemini, Groq, Mistral, Ollama.
+            // Image tokens are not in the text budget; vision calls carry one image only.
+            DataArray parts = DataArray.empty()
+                    .add(DataObject.empty()
+                            .put("type", "text")
+                            .put("text", String.join("\n", cappedMessages)));
+            for (VisionImage image : request.images()) {
+                parts.add(DataObject.empty()
+                        .put("type", "image_url")
+                        .put("image_url", DataObject.empty()
+                                .put("url", "data:" + image.mimeType() + ";base64," + image.base64())));
+            }
+            userMessage.put("content", parts);
+        }
         DataObject payload = DataObject.empty()
                 .put("stream", false)
                 .put("messages", DataArray.empty()
                         .add(DataObject.empty()
                                 .put("role", "system")
                                 .put("content", effectiveSystemPrompt))
-                        .add(DataObject.empty()
-                                .put("role", "user")
-                                .put("content", String.join("\n", cappedMessages))));
+                        .add(userMessage));
         if ("OpenRouter".equals(provider.displayName())) {
             payload.put("models", DataArray.empty().add(provider.model()));
         } else {

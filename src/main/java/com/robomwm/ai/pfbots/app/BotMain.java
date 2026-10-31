@@ -119,6 +119,9 @@ public class BotMain {
             // Per-bot voice, shared provider backend (keys from ai.yaml/env, models in code).
             RoundRobinGenerativeAiResponder generativeAiResponder =
                     new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
+            // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
+            RoundRobinGenerativeAiResponder visionResponder =
+                    RoundRobinGenerativeAiResponder.visionResponder(aiConfig);
             ArliAiReactionResponder reactionResponder =
                     new ArliAiReactionResponder(aiConfig, coordinator, profile.reactionPrompt());
             ArliAiSecondChanceResponder secondChanceResponder =
@@ -129,7 +132,7 @@ public class BotMain {
             boolean markovAvailable = false;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
-                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator);
+                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                     break;
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -149,7 +152,7 @@ public class BotMain {
                 // pointless, so this second attempt is not retried on failure.
                 // A failed bot is skipped so the others still come online.
                 try {
-                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator);
+                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                 } catch (LoginException | RuntimeException e) {
                     System.err.println("[" + profile.displayName() + "] Startup without MESSAGE_CONTENT failed, skipping: " + e);
                     continue;
@@ -193,7 +196,8 @@ public class BotMain {
                                         RoundRobinGenerativeAiResponder generativeAiResponder,
                                         ArliAiReactionResponder reactionResponder,
                                         ArliAiSecondChanceResponder secondChanceResponder,
-                                        ArliAiCoordinator coordinator)
+                                        ArliAiCoordinator coordinator,
+                                        RoundRobinGenerativeAiResponder visionResponder)
             throws LoginException, InterruptedException {
         boolean isParaoka = isParaoka(profile);
         ListenerAdapter listener;
@@ -214,7 +218,7 @@ public class BotMain {
 
         if (enableMessageContent) {
             markovListener = new MarkovListener(markovManager, markovConfig, null, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator,
-                    profile.botTag(), profile.reactionPrompt(), profile.key());
+                    profile.botTag(), profile.reactionPrompt(), profile.key(), visionResponder);
         }
 
         StartupProbe probe = new StartupProbe();

@@ -16,6 +16,10 @@ import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionAddEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
@@ -25,6 +29,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,6 +40,8 @@ public class MarkovListener extends ListenerAdapter {
     private final GenerativeAiResponder generativeAiResponder;
     private final GenerativeAiResponder reactionResponder;
     private final GenerativeAiResponder secondChanceResponder;
+    private final GenerativeAiResponder visionResponder;
+    private final HttpClient imageClient;
     private final ArliAiCoordinator coordinator;
     private final String botTag;
     private final String botDisplayName;
@@ -47,6 +55,57 @@ public class MarkovListener extends ListenerAdapter {
     private final Map<Long, ScheduledFuture<?>> pendingReactionDebounceByChannel = new HashMap<>();
     private final Map<Long, Long> firstInvocationTimeByChannel = new ConcurrentHashMap<>();
     private final Set<Long> channelsNeedingScrub = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    /** Attachment id -> metadata. Metadata only; bytes are downloaded on demand, never on arrival. */
+    private final Map<String, PendingImage> pendingImagesById = new ConcurrentHashMap<>();
+    // On-demand vision: text model asks for an image only when it needs detail.
+    // Marker format the text model must output alone, nothing else, when it needs an image:
+    //   NEED_VISION: <attachment id>: <specific question about the image>
+    // The question defaults to "Describe this image in detail" when omitted.
+    // One vision round per reply max; the second text pass must not emit the marker again.
+    static final Pattern VISION_NEED_PATTERN = Pattern.compile("(?s)^\\s*NEED_VISION:\\s*(\\d+)(?::\\s*(.+))?\\s*$");
+    static final String VISION_INSTRUCTION = """
+            If the newest question needs detail from an attached image that is not in the text, reply with ONLY this line and nothing else: NEED_VISION: <image id>: <specific question about the image>.
+            Attached images appear in history as [image id=<id> file=<name>].
+            Never guess image content. If no image detail is needed, answer normally and never output NEED_VISION.""";
+    static final String VISION_SYSTEM_PROMPT = "Answer only about the image provided. Describe only what is actually visible, never guess.";
+    static final long MAX_IMAGE_BYTES = 10_000_000;
+    static final Set<String> VISION_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif");
+
+    /** Parsed NEED_VISION marker: which image, and what the text model wants to know. */
+    record VisionNeed(String imageId, String question) {
+    }
+
+    /** Discord attachment metadata, without bytes. */
+    record PendingImage(String id, String fileName, String contentType, long size, String url) {
+    }
+
+    static VisionNeed parseVisionNeed(String reply) {
+        if (reply == null) return null;
+        Matcher m = VISION_NEED_PATTERN.matcher(reply.trim());
+        if (!m.matches()) return null;
+        String question = m.group(2);
+        return new VisionNeed(m.group(1), (question == null || question.isBlank()) ? "Describe this image in detail" : question.trim());
+    }
+
+    static String imagePlaceholder(PendingImage image) {
+        return "[image id=" + image.id() + " file=" + image.fileName() + "]";
+    }
+
+    static List<PendingImage> imageAttachments(Message message) {
+        if (message == null || message.getAttachments() == null) return List.of();
+        List<PendingImage> out = new ArrayList<>();
+        for (Message.Attachment a : message.getAttachments()) {
+            if (a == null || !a.isImage()) continue;
+            out.add(new PendingImage(String.valueOf(a.getIdLong()), a.getFileName(), a.getContentType(), a.getSize(), a.getUrl()));
+        }
+        return out;
+    }
+
+    private void rememberImages(List<PendingImage> images) {
+        for (PendingImage image : images) {
+            pendingImagesById.put(image.id(), image);
+        }
+    }
     private final AtomicInteger messageCount = new AtomicInteger(100);
     private static final Pattern MENTION_PATTERN = Pattern.compile("<@!?\\d+>|<@&\\d+>|<#\\d+>");
     private static final Pattern CUSTOM_EMOJI_PATTERN = Pattern.compile("(<a?:([A-Za-z0-9_]{2,32}):(\\d+)>)|(:([A-Za-z0-9_]{2,32}):(\\d+)?)");
@@ -105,6 +164,11 @@ public class MarkovListener extends ListenerAdapter {
 
     /** Per-bot variant with explicit identity for per-bot toggles (e.g. paraokabot). */
     public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey) {
+        this(manager, config, jda, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator, botTag, reactionPrompt, botKey, new PlaceholderGenerativeAiResponder());
+    }
+
+    /** Full variant with an on-demand vision responder (vision models only). */
+    public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey, GenerativeAiResponder visionResponder) {
         this.manager = manager;
         this.config = config;
         this.jda = jda;
@@ -112,6 +176,8 @@ public class MarkovListener extends ListenerAdapter {
         this.generativeAiResponder = generativeAiResponder;
         this.reactionResponder = reactionResponder;
         this.secondChanceResponder = secondChanceResponder;
+        this.visionResponder = visionResponder != null ? visionResponder : new PlaceholderGenerativeAiResponder();
+        this.imageClient = HttpClient.newHttpClient();
         this.coordinator = coordinator;
         String normalizedTag = (botTag == null || botTag.isBlank()) ? BotRegistry.MasterOEBot.botTag() : botTag;
         this.botTag = normalizedTag.endsWith(" ") ? normalizedTag : normalizedTag + " ";
@@ -217,9 +283,25 @@ public class MarkovListener extends ListenerAdapter {
 
         manager.loadBrain(channelId);
 
-        String content = MarkovUtils.getDisplayNameContent(message);
+        String rawContent = MarkovUtils.getDisplayNameContent(message);
+        final String content = rawContent == null ? "" : rawContent;
 
-        if (content == null || content.trim().isEmpty() || content.trim().startsWith("!")) {
+        // Record image metadata only. Bytes are downloaded later, and only
+        // if the text model outputs NEED_VISION for that image.
+        List<PendingImage> images = imageAttachments(message);
+        rememberImages(images);
+        rememberImages(imageAttachments(message.getReferencedMessage()));
+        String logContent = content;
+        if (!images.isEmpty()) {
+            StringBuilder sb = new StringBuilder(logContent);
+            for (PendingImage image : images) {
+                if (!sb.isEmpty()) sb.append(' ');
+                sb.append(imagePlaceholder(image));
+            }
+            logContent = sb.toString().trim();
+        }
+
+        if ((content.trim().isEmpty() && images.isEmpty()) || content.trim().startsWith("!")) {
             String author = message.getAuthor() != null ? message.getAuthor().getEffectiveName() : "unknown";
             System.out.println("Ignored message in channel " + channelId + " from " + author + ": empty or starts with ! content='" + content + "'");
             return;
@@ -228,14 +310,16 @@ public class MarkovListener extends ListenerAdapter {
         boolean isBot = message.getAuthor().isBot();
 
         if (!isBot) {
-            manager.train(channelId, content);
+            if (!content.trim().isEmpty()) {
+                manager.train(channelId, content);
+                manager.appendToBrain(channelId, content);
+            }
             if (!manager.aiLogExists(channelId)) {
                 seedAiLogFromHistory(event, channelId);
             }
-            manager.appendToBrain(channelId, content);
             String authorName = event.getMember() != null ? event.getMember().getEffectiveName() : event.getAuthor().getEffectiveName();
-            manager.appendToAiLog(channelId, authorName, content);
-            manager.appendToChatLog(channelId, authorName, content);
+            manager.appendToAiLog(channelId, authorName, logContent);
+            manager.appendToChatLog(channelId, authorName, logContent);
             
             if (messageCount.incrementAndGet() >= 100) {
                 messageCount.set(0);
@@ -324,6 +408,7 @@ public class MarkovListener extends ListenerAdapter {
                 System.out.println("Async resolve result for channel " + channelId + " content='" + content + "' isSelf=" + isSelf + " syncDirect=" + syncDirect + " asyncAllowed=" + asyncAllowed + " suppressedByOther=" + suppressed + " referencedAuthor=" + (referenced != null ? referenced.getAuthor().getEffectiveName() : "null") + " referencedContent='" + (referenced != null ? MarkovUtils.getDisplayNameContent(referenced) : "null") + "'");
                 if (asyncAllowed && isSelf && !syncDirect && !suppressed) {
                     System.out.println("Triggered async reply in channel " + channelId + " for content='" + content + "'");
+                    rememberImages(imageAttachments(referenced));
                     sendTriggeredReply(event, channelId, content, referenced);
                 } else if (syncDirect) {
                     System.out.println("Ignored async resolve in channel " + channelId + " content='" + content + "' reason=already-handled-sync-direct");
@@ -428,10 +513,11 @@ public class MarkovListener extends ListenerAdapter {
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
         List<ScheduledFuture<?>> typingTasks = startTyping(event, (int) GENERATIVE_AI_TIMEOUT_SECONDS);
 
-        String systemPrompt = null;
+        String rawSystemPrompt = null;
         if (generativeAiResponder instanceof RoundRobinGenerativeAiResponder rr) {
-            systemPrompt = resolvePrompt(rr.getSystemPrompt(), event.getGuild());
+            rawSystemPrompt = resolvePrompt(rr.getSystemPrompt(), event.getGuild());
         }
+        final String systemPrompt = rawSystemPrompt;
         List<String> recentMessages = manager.getRecentMessagesForAiUntilTokenBudget(channelId, gatherBudgetFor(generativeAiResponder), systemPrompt);
 
         if (referencedMessage != null && !recentMessages.isEmpty()) {
@@ -455,7 +541,9 @@ public class MarkovListener extends ListenerAdapter {
             }
         }
 
-        GenerativeAiRequest request = new GenerativeAiRequest(recentMessages, systemPrompt);
+        // First pass only: the text model may ask for an image via NEED_VISION.
+        String firstPassPrompt = systemPrompt == null ? VISION_INSTRUCTION : systemPrompt + "\n" + VISION_INSTRUCTION;
+        GenerativeAiRequest request = new GenerativeAiRequest(recentMessages, firstPassPrompt);
 
         CompletableFuture<String> replyFuture;
         try {
@@ -492,12 +580,117 @@ public class MarkovListener extends ListenerAdapter {
                         return;
                     }
 
+                    // Marker is internal only: never sent to the channel or logged.
+                    VisionNeed need = parseVisionNeed(safeReply);
+                    if (need != null) {
+                        runVisionLoop(event, channelId, content, recentMessages, systemPrompt, need);
+                        return;
+                    }
+
                     event.getChannel().sendMessage(safeReply)
                             .setAllowedMentions(Collections.emptyList())
                             .queue(success -> {
                                 trackAiMessage(channelId, safeReply);
                                 scheduleSecondReply(event, channelId, content);
                             });
+                });
+    }
+
+    /**
+     * On-demand vision, one round only: download the one image the text model
+     * asked about, ask a vision model its specific question, then let the text
+     * model write the final reply in its own voice. Anything fails -> Markov
+     * fallback, same as any other AI failure. The marker itself is never sent.
+     */
+    private void runVisionLoop(MessageReceivedEvent event, long channelId, String content,
+                               List<String> recentMessages, String systemPrompt, VisionNeed need) {
+        List<ScheduledFuture<?>> typingTasks = startTyping(event, (int) GENERATIVE_AI_TIMEOUT_SECONDS * 2);
+        PendingImage image = pendingImagesById.get(need.imageId());
+        if (image == null) {
+            stopTyping(typingTasks);
+            logGenerativeAiFailure(channelId, new IllegalStateException("NEED_VISION for unknown image id " + need.imageId()));
+            sendImmediateSeededMarkovReply(event, channelId, content);
+            return;
+        }
+        if (visionResponder instanceof PlaceholderGenerativeAiResponder) {
+            stopTyping(typingTasks);
+            logGenerativeAiFailure(channelId, new IllegalStateException("No vision responder configured"));
+            sendImmediateSeededMarkovReply(event, channelId, content);
+            return;
+        }
+        AtomicReference<String> visionAnswerRef = new AtomicReference<>();
+        downloadImage(image)
+                .thenCompose(bytes -> {
+                    String mime = image.contentType() != null && !image.contentType().isBlank()
+                            ? image.contentType() : "image/png";
+                    return visionResponder.generateReply(new GenerativeAiRequest(
+                            List.of(need.question()), VISION_SYSTEM_PROMPT,
+                            List.of(new VisionImage(Base64.getEncoder().encodeToString(bytes), mime))));
+                })
+                .thenCompose(visionAnswer -> {
+                    if (visionAnswer == null || visionAnswer.trim().isEmpty()) {
+                        return CompletableFuture.failedFuture(new IllegalStateException("Vision responder returned empty answer"));
+                    }
+                    visionAnswerRef.set(visionAnswer.trim());
+                    List<String> finalMessages = new ArrayList<>(recentMessages);
+                    finalMessages.add("[vision detail for image " + need.imageId() + "]: " + visionAnswer.trim());
+                    String finalPrompt = (systemPrompt == null ? "" : systemPrompt)
+                            + "\nVision detail is provided above. Answer the newest question now. Do not output NEED_VISION.";
+                    return generativeAiResponder.generateReply(new GenerativeAiRequest(finalMessages, finalPrompt));
+                })
+                .orTimeout(GENERATIVE_AI_TIMEOUT_SECONDS * 2, TimeUnit.SECONDS)
+                .whenComplete((finalReply, error) -> {
+                    stopTyping(typingTasks);
+                    if (error != null) {
+                        logGenerativeAiFailure(channelId, error);
+                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        return;
+                    }
+                    String safeReply = escapeMassMentions(resolveGuildEmoji(event.getGuild(), sanitizeOutput(MarkovManager.stripBotPrefix(finalReply))));
+                    if (safeReply.trim().isEmpty()) {
+                        logGenerativeAiFailure(channelId, new IllegalStateException("Vision final reply was empty"));
+                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        return;
+                    }
+                    // Second pass still asked for vision: send the vision detail itself, not the marker.
+                    if (parseVisionNeed(safeReply) != null) {
+                        safeReply = visionAnswerRef.get() != null ? visionAnswerRef.get() : safeReply;
+                    }
+                    final String toSend = safeReply;
+                    event.getChannel().sendMessage(toSend)
+                            .setAllowedMentions(Collections.emptyList())
+                            .queue(success -> {
+                                trackAiMessage(channelId, toSend);
+                                scheduleSecondReply(event, channelId, content);
+                            });
+                });
+    }
+
+    private CompletableFuture<byte[]> downloadImage(PendingImage image) {
+        if (image.url() == null || image.url().isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Image " + image.id() + " has no URL"));
+        }
+        if (image.size() > MAX_IMAGE_BYTES) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Image " + image.id() + " exceeds " + MAX_IMAGE_BYTES + " bytes"));
+        }
+        if (image.contentType() != null && !image.contentType().isBlank() && !VISION_MIME_TYPES.contains(image.contentType())) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Image " + image.id() + " type " + image.contentType() + " is not supported for vision"));
+        }
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(image.url()))
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        return imageClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
+                .thenApply(response -> {
+                    if (response.statusCode() != 200) {
+                        throw new IllegalStateException("Image download failed with status " + response.statusCode());
+                    }
+                    byte[] bytes = response.body();
+                    if (bytes == null || bytes.length == 0 || bytes.length > MAX_IMAGE_BYTES) {
+                        throw new IllegalStateException("Image download returned " + (bytes == null ? 0 : bytes.length) + " bytes");
+                    }
+                    return bytes;
                 });
     }
 

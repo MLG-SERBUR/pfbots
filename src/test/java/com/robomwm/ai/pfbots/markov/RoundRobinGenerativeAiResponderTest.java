@@ -1,5 +1,6 @@
 package com.robomwm.ai.pfbots.markov;
 
+import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.Test;
 
@@ -502,6 +503,40 @@ class RoundRobinGenerativeAiResponderTest {
         public void onComplete() {
             bodyFuture.complete(body.toString());
         }
+    }
+
+    @Test
+    void imageRequestBuildsContentPartsNotJoinedString() {
+        RecordingHttpClient client = new RecordingHttpClient();
+        RoundRobinGenerativeAiResponder responder = new RoundRobinGenerativeAiResponder(client, List.of(
+                new RoundRobinGenerativeAiResponder.Provider("Gemini", "https://gemini.example/chat", "gk", "gemini-2.5-flash", Map.of(), false)
+        ), "system prompt");
+        GenerativeAiRequest request = new GenerativeAiRequest(List.of("what color?"), "system prompt",
+                List.of(new VisionImage("aGVsbG8=", "image/png")));
+
+        responder.generateReply(request).join();
+
+        DataObject payload = DataObject.fromJson(client.bodies.get(0));
+        DataObject userMessage = payload.getArray("messages").getObject(1);
+        DataArray parts = userMessage.getArray("content");
+        assertEquals("text", parts.getObject(0).getString("type"));
+        assertEquals("what color?", parts.getObject(0).getString("text"));
+        assertEquals("image_url", parts.getObject(1).getString("type"));
+        assertEquals("data:image/png;base64,aGVsbG8=", parts.getObject(1).getObject("image_url").getString("url"));
+    }
+
+    @Test
+    void visionProvidersFilterToVisionModelsGeminiFirst() {
+        // defaults() reads API keys from env (empty here), and buildProviders
+        // skips keyless providers, so pass dummy keys to get a full chain.
+        GenerativeAiConfig config = new GenerativeAiConfig(
+                "ck", "gk", "ok", "gemk", "mk", "zk", "cfk", "cfid", "ollk", "snk", "ark");
+        List<RoundRobinGenerativeAiResponder.Provider> vision = RoundRobinGenerativeAiResponder.visionProviders(config);
+
+        assertFalse(vision.isEmpty());
+        assertTrue(vision.stream().allMatch(p -> GenerativeAiConfig.supportsVision(p.model())));
+        assertTrue(vision.stream().noneMatch(p -> p.model().equals("beam")));
+        assertEquals("Gemini", vision.get(0).displayName());
     }
 
     private record StringResponse(HttpRequest request, int statusCode, String body) implements HttpResponse<String> {
