@@ -548,7 +548,7 @@ public class MarkovListener extends ListenerAdapter {
 
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
         TypingSession typing = new TypingSession(event, scheduler);
-        typing.pulse((int) GENERATIVE_AI_TIMEOUT_SECONDS);
+        typing.pulse();
 
         String rawSystemPrompt = null;
         if (generativeAiResponder instanceof RoundRobinGenerativeAiResponder rr) {
@@ -606,8 +606,7 @@ public class MarkovListener extends ListenerAdapter {
             return;
         }
 
-        replyFuture.orTimeout(GENERATIVE_AI_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .whenComplete((reply, error) -> {
+        replyFuture.whenComplete((reply, error) -> {
                     if (error != null) {
                         typing.close();
                         logGenerativeAiFailure(channelId, error);
@@ -671,7 +670,7 @@ public class MarkovListener extends ListenerAdapter {
         }
         System.out.println("Vision loop: downloading image " + image.id() + " (" + image.fileName() + ", " + image.size() + " bytes)...");
         AtomicReference<String> visionAnswerRef = new AtomicReference<>();
-        session.pulse((int) IMAGE_DOWNLOAD_TIMEOUT_SECONDS);
+        session.pulse();
         CompletableFuture<byte[]> imageFuture;
         try {
             imageFuture = downloadImage(image);
@@ -686,7 +685,7 @@ public class MarkovListener extends ListenerAdapter {
                     if ("image/jpg".equalsIgnoreCase(mime)) {
                         mime = "image/jpeg";
                     }
-                    session.pulse((int) GENERATIVE_AI_TIMEOUT_SECONDS);
+                    session.pulse();
                     System.out.println("Vision loop: sending " + bytes.length + " bytes (" + mime + ") to vision responder with prompt='" + need.question() + "'...");
                     CompletableFuture<String> visionFuture = visionResponder.generateReply(new GenerativeAiRequest(
                             List.of(need.question()), VISION_SYSTEM_PROMPT,
@@ -694,14 +693,14 @@ public class MarkovListener extends ListenerAdapter {
                     if (visionFuture == null) {
                         return CompletableFuture.failedFuture(new IllegalStateException("Vision responder returned null future"));
                     }
-                    return visionFuture.orTimeout(GENERATIVE_AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    return visionFuture;
                 })
                 .thenCompose(visionAnswer -> {
                     if (visionAnswer == null || visionAnswer.trim().isEmpty()) {
                         return CompletableFuture.failedFuture(new IllegalStateException("Vision responder returned empty answer"));
                     }
                     visionAnswerRef.set(visionAnswer.trim());
-                    session.pulse((int) GENERATIVE_AI_TIMEOUT_SECONDS);
+                    session.pulse();
                     System.out.println("Vision loop: vision responder answered (" + visionAnswer.trim().length() + " chars). Running final text generation...");
                     List<String> finalMessages = new ArrayList<>(recentMessages);
                     finalMessages.add("[vision detail for image " + need.imageId() + "]: " + visionAnswer.trim());
@@ -711,7 +710,7 @@ public class MarkovListener extends ListenerAdapter {
                     if (textFuture == null) {
                         return CompletableFuture.failedFuture(new IllegalStateException("Generative AI responder returned null future"));
                     }
-                    return textFuture.orTimeout(GENERATIVE_AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    return textFuture;
                 })
                 .whenComplete((finalReply, error) -> {
                     session.close();
@@ -1168,23 +1167,18 @@ public class MarkovListener extends ListenerAdapter {
             this.scheduler = scheduler;
         }
 
-        /**
-         * Immediately sends a typing indicator refresh and schedules pulses every 15s up to maxSeconds,
-         * giving the impression the bot is actively thinking/processing.
-         */
-        synchronized void pulse(int maxSeconds) {
+        /** Keeps the typing indicator active until this session is closed or restarted. */
+        synchronized void pulse() {
             stop();
             if (closed || event == null || event.getChannel() == null) return;
             sendTypingIndicator();
-            for (int d = 15; d < maxSeconds; d += 15) {
-                tasks.add(scheduler.schedule(() -> {
-                    synchronized (this) {
-                        if (!closed && event != null && event.getChannel() != null) {
-                            sendTypingIndicator();
-                        }
+            tasks.add(scheduler.scheduleAtFixedRate(() -> {
+                synchronized (this) {
+                    if (!closed && event != null && event.getChannel() != null) {
+                        sendTypingIndicator();
                     }
-                }, d, TimeUnit.SECONDS));
-            }
+                }
+            }, 15, 15, TimeUnit.SECONDS));
         }
 
         private void sendTypingIndicator() {

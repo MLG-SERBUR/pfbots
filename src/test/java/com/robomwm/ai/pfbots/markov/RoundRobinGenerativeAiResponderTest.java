@@ -73,6 +73,10 @@ class RoundRobinGenerativeAiResponderTest {
                 URI.create("https://cerebras.example/chat"),
                 URI.create("https://groq.example/chat")
         ), client.uris);
+        assertEquals(List.of(
+                Duration.ofSeconds(45),
+                Duration.ofSeconds(45)
+        ), client.timeouts);
     }
 
     @Test
@@ -395,6 +399,7 @@ class RoundRobinGenerativeAiResponderTest {
 
     private static final class RecordingHttpClient extends HttpClient {
         private final List<URI> uris = new ArrayList<>();
+        private final List<Duration> timeouts = new ArrayList<>();
         private final List<String> bodies = new ArrayList<>();
         private final List<HttpResponse<String>> responseSequence = new ArrayList<>();
         private int responseIndex = 0;
@@ -459,6 +464,7 @@ class RoundRobinGenerativeAiResponderTest {
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(HttpRequest request,
                                                                  HttpResponse.BodyHandler<T> responseBodyHandler) {
             uris.add(request.uri());
+            timeouts.add(request.timeout().orElseThrow());
             bodies.add(readBody(request));
             HttpResponse<String> response = responseIndex < responseSequence.size()
                     ? responseSequence.get(responseIndex++)

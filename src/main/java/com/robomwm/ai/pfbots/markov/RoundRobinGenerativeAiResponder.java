@@ -101,30 +101,24 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
         if (providers.isEmpty()) {
             return CompletableFuture.failedFuture(new IllegalStateException("No generative AI providers configured"));
         }
-        long deadlineMs = System.currentTimeMillis() + (REQUEST_TIMEOUT_SECONDS * 1000L);
-        return attemptGenerateReply(request, deadlineMs, 0, "none", false);
+        return attemptGenerateReply(request, 0, "none", false);
     }
 
-    private CompletableFuture<String> attemptGenerateReply(GenerativeAiRequest request, long deadlineMs, int attempts, String reasoningEffort, boolean calibrationRetryDone) {
-        long timeRemainingMs = deadlineMs - System.currentTimeMillis();
-        if (attempts > 0 && timeRemainingMs < 0) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Not enough time remaining to try next provider"));
-        }
-
+    private CompletableFuture<String> attemptGenerateReply(GenerativeAiRequest request, int attempts, String reasoningEffort, boolean calibrationRetryDone) {
         if (attempts >= providers.size()) {
             return CompletableFuture.failedFuture(new IllegalStateException("No more providers available"));
         }
 
         Provider provider = providers.get(attempts);
-        return attemptWithProvider(provider, request, deadlineMs, attempts, reasoningEffort, calibrationRetryDone);
+        return attemptWithProvider(provider, request, attempts, reasoningEffort, calibrationRetryDone);
     }
 
-    private CompletableFuture<String> attemptWithProvider(Provider provider, GenerativeAiRequest request, long deadlineMs, int attempts, String reasoningEffort, boolean calibrationRetryDone) {
+    private CompletableFuture<String> attemptWithProvider(Provider provider, GenerativeAiRequest request, int attempts, String reasoningEffort, boolean calibrationRetryDone) {
         HttpRequest httpRequest;
         try {
             httpRequest = buildRequest(provider, request, reasoningEffort);
         } catch (Exception e) {
-            return fallback(request, deadlineMs, attempts + 1, e, calibrationRetryDone);
+            return fallback(request, attempts + 1, e, calibrationRetryDone);
         }
 
         System.out.println("Starting " + provider.displayName() + " (" + provider.model() + ") request with reasoning effort: " + reasoningEffort + "...");
@@ -134,7 +128,7 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
                     Throwable cause = e.getCause() != null ? e.getCause() : e;
                     if (cause instanceof ReasoningMandatoryException && "none".equals(reasoningEffort)) {
                         System.out.println("Reasoning is mandatory for " + provider.model() + ". Retrying same provider with 'minimal' effort...");
-                        return attemptWithProvider(provider, request, deadlineMs, attempts, "minimal", calibrationRetryDone);
+                        return attemptWithProvider(provider, request, attempts, "minimal", calibrationRetryDone);
                     }
                     // Self-calibration: heuristic underestimated -> update factor and retry once with truncated history
                     String errorMsg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
@@ -152,23 +146,22 @@ public class RoundRobinGenerativeAiResponder implements GenerativeAiResponder {
                                 String calMsg = "Context exceeded (" + actual + "/" + limit + "). Calibrated factor ["
                                         + TokenCalibrationManager.familyForModel(provider.model()) + "] to " + String.format("%.2f", TokenCalibrationManager.getInstance().getFactor(provider.model())) + " and retrying with " + newSize + " messages (" + (int) (targetRatio * 100) + "%)...";
                                 System.out.println(calMsg);
-                                return attemptWithProvider(provider, truncatedRequest, deadlineMs, attempts, reasoningEffort, true);
+                                return attemptWithProvider(provider, truncatedRequest, attempts, reasoningEffort, true);
                             }
                         }
                     }
-                    return fallback(request, deadlineMs, attempts + 1, e, calibrationRetryDone);
+                    return fallback(request, attempts + 1, e, calibrationRetryDone);
                 });
     }
 
-    private CompletableFuture<String> fallback(GenerativeAiRequest request, long deadlineMs, int nextAttempts, Throwable e, boolean calibrationRetryDone) {
+    private CompletableFuture<String> fallback(GenerativeAiRequest request, int nextAttempts, Throwable e, boolean calibrationRetryDone) {
         System.err.println("Provider failed: " + e.toString());
-        long timeRemainingMs = deadlineMs - System.currentTimeMillis();
 
-        if (nextAttempts >= providers.size() || timeRemainingMs <= 2000) {
+        if (nextAttempts >= providers.size()) {
             return CompletableFuture.failedFuture(e);
         }
         System.out.println("Retrying next provider...");
-        return attemptGenerateReply(request, deadlineMs, nextAttempts, "none", calibrationRetryDone);
+        return attemptGenerateReply(request, nextAttempts, "none", calibrationRetryDone);
     }
 
     private String buildCalibrationPrompt(GenerativeAiRequest request, Provider provider) {
