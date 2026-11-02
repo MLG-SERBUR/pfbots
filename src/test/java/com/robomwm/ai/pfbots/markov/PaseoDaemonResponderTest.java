@@ -15,6 +15,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PaseoDaemonResponderTest {
+    @Test
+    void paseoSystemPromptIsCompleteAndSelfContained() {
+        String prompt = PaseoDaemonResponder.PASEO_SYSTEM_PROMPT;
+        assertTrue(prompt != null && !prompt.isBlank());
+        assertTrue(prompt.contains("{{BOT_NAME}}"));
+        assertTrue(prompt.contains("data/markov/<channelId>/ai.log"));
+        assertTrue(prompt.contains("reply schema"));
+    }
+
     private static Path fakeBridge(Path dir, Path capture, String script) throws Exception {
         Path bridge = dir.resolve("fake-bridge.sh");
         Files.writeString(bridge, script.replace("CAPTURE", capture.toString()), StandardCharsets.UTF_8);

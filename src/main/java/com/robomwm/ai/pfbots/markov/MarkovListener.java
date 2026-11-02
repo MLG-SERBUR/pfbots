@@ -650,7 +650,7 @@ public class MarkovListener extends ListenerAdapter {
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
         // Paseo path only: no timeout (owner instruction), no history sent by
         // Java, no NEED_VISION marker. The agent reads data/markov logs itself
-        // per the instructions constant in paseo-bridge/paseo-bridge.mjs, and triggering/referenced
+        // per PaseoDaemonResponder.PASEO_SYSTEM_PROMPT, and triggering/referenced
         // images are attached natively via the SDK. Second-chance and
         // reaction paths are untouched and keep their own timeouts.
         if (generativeAiResponder instanceof PaseoDaemonResponder paseo) {
