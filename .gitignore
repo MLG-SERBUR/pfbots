@@ -11,8 +11,9 @@
 .DS_Store
 
 # Node bridge dependencies (installed by `cd paseo-bridge && npm install`;
-# package-lock.json is intentionally NOT ignored, commit it for reproducible installs)
+# package-lock.json is ignored too: each install resolves from package.json)
 paseo-bridge/node_modules/
+paseo-bridge/package-lock.json
 
 # Runtime/config secrets
 ai.yaml
