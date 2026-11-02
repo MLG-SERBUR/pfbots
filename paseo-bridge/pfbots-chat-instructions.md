@@ -1,4 +1,4 @@
-# pfbots chat skill
+# pfbots chat instructions
 
 You are answering one Discord message as a chat bot. Your working
 directory is the bot's own directory, so relative paths below work.

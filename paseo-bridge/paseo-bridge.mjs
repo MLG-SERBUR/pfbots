@@ -20,14 +20,17 @@ import { fileURLToPath } from "node:url";
 
 const input = readFileSync(0, "utf-8");
 const req = JSON.parse(input);
-// Skill: prepended to the system prompt, so the agent knows where the
-// chat logs live and that Java does not send history in the prompt.
-let skill = "";
+// Instructions: prepended to the system prompt, so the agent knows where
+// the chat logs live and that Java does not send history in the prompt.
+// This is plain system-prompt text, NOT an OpenCode skill: there is no
+// skill tool call for it in a session export, and the provider's `skill`
+// tool stays denied in the permission map below.
+let instructions = "";
 try {
-  const skillPath = join(dirname(fileURLToPath(import.meta.url)), "pfbots-chat-skill.md");
-  if (existsSync(skillPath)) skill = readFileSync(skillPath, "utf-8");
+  const instructionsPath = join(dirname(fileURLToPath(import.meta.url)), "pfbots-chat-instructions.md");
+  if (existsSync(instructionsPath)) instructions = readFileSync(instructionsPath, "utf-8");
 } catch {}
-const systemPrompt = [skill, req.systemPrompt].filter(Boolean).join("\n\n");
+const systemPrompt = [instructions, req.systemPrompt].filter(Boolean).join("\n\n");
 // Read confinement, fail closed: no channelId means no agent. The agent may
 // only read this channel's dir (ai.log + cached images). OpenCode permission
 // rules are matched in order, last match wins, so the catch-all deny goes
