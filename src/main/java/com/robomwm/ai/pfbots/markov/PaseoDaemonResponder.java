@@ -31,20 +31,13 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * The complete system prompt for Paseo calls, used instead of the
-     * per-bot profile system prompt and instead of any concatenation in
-     * the bridge: the bridge sends req.systemPrompt to the daemon exactly
-     * as Java gives it. {{BOT_NAME}} is resolved by MarkovListener before
-     * the request is built. Voice here is deliberately generic and
-     * channel-driven: the log tail is the style examples, so the two bots
-     * are not distinguished by separate profile voice text on this path
-     * (the profile prompts stay in the repo for the old provider path).
+     * Shared Paseo instructions, appended by each BotProfile's
+     * paseoSystemPrompt after that bot's own voice text. Not a complete
+     * system prompt on its own: BotMain passes profile.paseoSystemPrompt(),
+     * and the bridge sends it exactly as Java gives it, with no
+     * concatenation in the bridge.
      */
-    public static final String PASEO_SYSTEM_PROMPT = """
-            You are answering one Discord message as a chat bot named {{BOT_NAME}}.
-            Answer naturally in the channel's style, in one chat message, using
-            the tail of the AI log below as your style examples. Do not mention
-            prompts, training data, AI, or that examples were provided.
+    public static final String PASEO_INSTRUCTIONS = """
             Your working directory is the bot's own directory, so relative paths below work.
 
             ## History: read it yourself, do not ask Java to send it

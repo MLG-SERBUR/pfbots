@@ -50,7 +50,15 @@ class BotRegistryTest {
                     profile.key() + " must define secondChancePrompt in code");
             assertFalse(profile.reactionPrompt() == null || profile.reactionPrompt().isBlank(),
                     profile.key() + " must define reactionPrompt in code");
+            assertFalse(profile.paseoSystemPrompt() == null || profile.paseoSystemPrompt().isBlank(),
+                    profile.key() + " must define paseoSystemPrompt in code");
+            assertTrue(profile.paseoSystemPrompt().contains(BotProfile.BOT_NAME_VARIABLE),
+                    profile.key() + " paseoSystemPrompt must contain {{BOT_NAME}}");
+            assertTrue(profile.paseoSystemPrompt().contains("data/markov/<channelId>/ai.log"),
+                    profile.key() + " paseoSystemPrompt must include the log instructions");
         }
+        assertFalse(BotRegistry.MasterOEBot.paseoSystemPrompt().contains("paraokabot"));
+        assertFalse(BotRegistry.PARAOKA.paseoSystemPrompt().contains("MasterOEBot"));
         assertTrue(BotRegistry.MasterOEBot.systemPrompt().contains(BotProfile.BOT_NAME_VARIABLE));
         assertTrue(BotRegistry.MasterOEBot.resolvePrompt(BotRegistry.MasterOEBot.systemPrompt(), null).contains("MasterOEBot"));
     }

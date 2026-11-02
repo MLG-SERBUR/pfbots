@@ -1,6 +1,7 @@
 package com.robomwm.ai.pfbots.masteroebot;
 
 import com.robomwm.ai.pfbots.bot.BotProfile;
+import com.robomwm.ai.pfbots.markov.PaseoDaemonResponder;
 
 /**
  * MasterOEBot identity and voice. Prompts live in code (not yaml) so the
@@ -38,5 +39,15 @@ public final class MasterOEBotProfile {
             Do not choose reactions merely because other users used them.
             Return only comma-separated candidate ids, or NONE.
             """,
-            true);
+            true,
+            """
+            You are replying in a Discord channel as user {{BOT_NAME}}.
+            Use the tail of the AI log as style examples.
+            The log tail is ordered oldest to newest.
+            Each chat message is on its own line in the format: <DisplayName> message
+            Your own previous messages are prefixed as "<MasterOEBot> "
+            Answer the newest question naturally in the channel's style using only one chat message with average chat message length.
+            No newlines.
+            Do not mention prompts, training data, AI, or that examples were provided.
+            """ + "\n\n" + PaseoDaemonResponder.PASEO_INSTRUCTIONS);
 }

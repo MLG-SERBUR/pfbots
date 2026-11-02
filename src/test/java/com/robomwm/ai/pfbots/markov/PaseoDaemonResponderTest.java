@@ -16,12 +16,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PaseoDaemonResponderTest {
     @Test
-    void paseoSystemPromptIsCompleteAndSelfContained() {
-        String prompt = PaseoDaemonResponder.PASEO_SYSTEM_PROMPT;
-        assertTrue(prompt != null && !prompt.isBlank());
-        assertTrue(prompt.contains("{{BOT_NAME}}"));
-        assertTrue(prompt.contains("data/markov/<channelId>/ai.log"));
-        assertTrue(prompt.contains("reply schema"));
+    void paseoInstructionsCoverLogImagesAndSchema() {
+        String instructions = PaseoDaemonResponder.PASEO_INSTRUCTIONS;
+        assertTrue(instructions != null && !instructions.isBlank());
+        assertTrue(instructions.contains("data/markov/<channelId>/ai.log"));
+        assertTrue(instructions.contains("reply schema"));
     }
 
     private static Path fakeBridge(Path dir, Path capture, String script) throws Exception {

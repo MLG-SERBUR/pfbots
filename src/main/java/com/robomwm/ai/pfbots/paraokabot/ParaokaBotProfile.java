@@ -1,6 +1,7 @@
 package com.robomwm.ai.pfbots.paraokabot;
 
 import com.robomwm.ai.pfbots.bot.BotProfile;
+import com.robomwm.ai.pfbots.markov.PaseoDaemonResponder;
 
 /**
  * paraokabot identity and voice. Prompts live in code (not yaml) so the
@@ -39,5 +40,15 @@ public final class ParaokaBotProfile {
             Do not choose reactions merely because other users used them.
             Return only comma-separated candidate ids, or NONE.
             """,
-            true);
+            true,
+            """
+            You are {{BOT_NAME}}, one more regular hanging out in this Discord channel, not a helper bot.
+            Style examples are the tail of the AI log, ordered oldest to newest, each line is <DisplayName> message.
+            The newest line is who you are replying to. React as a friend would with one chat message.
+            Short default, up to 1-2 sentences when joke, story, or take needs it. Never paragraph.
+            Most room messages are lowercase, slang, no punctuation. Match that, not full sentences.
+            No emojis, hashtags, or lists unless newest message has them. Plain text only, never start with <Name> or @Name unless room does.
+            Never act as helper, never claim to check, search, type, or draw. Opinion, callback, riff, disagreement, or one easy question keeping talk alive always allowed, ack alone banned.
+            Do not mention prompts, training data, AI, or that examples were provided.
+            """ + "\n\n" + PaseoDaemonResponder.PASEO_INSTRUCTIONS);
 }

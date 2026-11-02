@@ -18,8 +18,8 @@ import { readFileSync } from "node:fs";
 
 const input = readFileSync(0, "utf-8");
 const req = JSON.parse(input);
-// System prompt comes complete from Java (PaseoDaemonResponder.
-// PASEO_SYSTEM_PROMPT) and is used exactly as sent: no concatenation
+// System prompt comes complete from Java (the profile's
+// paseoSystemPrompt) and is used exactly as sent: no concatenation
 // here, no file read, no bridge-side instructions. That prompt is plain
 // system-prompt text, NOT an OpenCode skill: there is no skill tool call
 // for it in a session export, and the provider's `skill` tool stays

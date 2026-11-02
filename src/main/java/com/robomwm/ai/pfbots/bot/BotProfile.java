@@ -12,7 +12,8 @@ public record BotProfile(
         String systemPrompt,
         String secondChancePrompt,
         String reactionPrompt,
-        boolean registersCommands) {
+        boolean registersCommands,
+        String paseoSystemPrompt) {
     /** Variable for live Discord display name inside prompts. */
     public static final String BOT_NAME_VARIABLE = "{{BOT_NAME}}";
 

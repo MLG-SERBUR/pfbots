@@ -128,12 +128,12 @@ public class BotMain {
             // "opencode/<model>" when the owner picks one.
             // Toggle back: replace the PaseoDaemonResponder line with:
             //   generativeAiResponder = new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
-            // Paseo calls use their own Java constant, not the profile
-            // system prompt and not a bridge concatenation: see
-            // PaseoDaemonResponder.PASEO_SYSTEM_PROMPT.
+            // Paseo calls use the profile's paseoSystemPrompt, not the
+            // profile system prompt and not a bridge concatenation: the
+            // bridge sends it exactly as Java gives it.
             GenerativeAiResponder generativeAiResponder = new PaseoDaemonResponder(
                     List.of("node", "paseo-bridge/paseo-bridge.mjs"),
-                    PASEO_PROVIDER, PaseoDaemonResponder.PASEO_SYSTEM_PROMPT);
+                    PASEO_PROVIDER, profile.paseoSystemPrompt());
             System.out.println("[" + profile.displayName() + "] Main replies via Paseo daemon: " + PASEO_PROVIDER);
             // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
             RoundRobinGenerativeAiResponder visionResponder =
