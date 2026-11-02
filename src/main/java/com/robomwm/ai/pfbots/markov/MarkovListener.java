@@ -336,17 +336,21 @@ public class MarkovListener extends ListenerAdapter {
         boolean isBot = message.getAuthor().isBot();
 
         if (!isBot) {
-            if (!content.trim().isEmpty()) {
-                manager.train(channelId, content);
-                manager.appendToBrain(channelId, content);
+            if (manager.claimMessageForIngestion(message.getIdLong())) {
+                if (!content.trim().isEmpty()) {
+                    manager.train(channelId, content);
+                    manager.appendToBrain(channelId, content);
+                }
+                if (!manager.aiLogExists(channelId)) {
+                    seedAiLogFromHistory(event, channelId);
+                }
+                String authorName = event.getMember() != null ? event.getMember().getEffectiveName() : event.getAuthor().getEffectiveName();
+                manager.appendToAiLog(channelId, authorName, logContent);
+                manager.appendToChatLog(channelId, authorName, logContent);
             }
-            if (!manager.aiLogExists(channelId)) {
-                seedAiLogFromHistory(event, channelId);
-            }
-            String authorName = event.getMember() != null ? event.getMember().getEffectiveName() : event.getAuthor().getEffectiveName();
-            manager.appendToAiLog(channelId, authorName, logContent);
-            manager.appendToChatLog(channelId, authorName, logContent);
-            
+
+            // The counter and presence belong to this bot, so every listener
+            // that receives the message must keep its own activity current.
             if (messageCount.incrementAndGet() >= 100) {
                 messageCount.set(0);
                 String statusMsg = escapeMassMentions(sanitizeOutput(manager.generateReply(channelId)));

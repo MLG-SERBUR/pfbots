@@ -8,6 +8,9 @@ import com.robomwm.ai.pfbots.bot.BotRegistry;
 
 public class MarkovManager {
     private static final Path DEFAULT_BRAIN_DIR = Paths.get("data/markov");
+    private static final long MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000L;
+    private static final long MESSAGE_DEDUPE_CLEANUP_INTERVAL_MS = 60 * 1000L;
+    private static final int MAX_DEDUPED_MESSAGE_IDS = 100_000;
     public static final String BOT_MESSAGE_PREFIX = "<MasterOEBot> ";
     private static final String BOT_MESSAGE_TAG = BOT_MESSAGE_PREFIX.trim();
     private static final String BRAIN_EXTENSION = ".brain";
@@ -17,6 +20,10 @@ public class MarkovManager {
     private final Path brainDir;
     private final Map<Long, JMegaHal> brains = new HashMap<>();
     private final Map<Long, Boolean> brainLoaded = new HashMap<>();
+    // Multiple bot listeners share this manager and can receive the same Discord message.
+    // Keep the idempotency state beside the shared brain and log writers.
+    private final LinkedHashMap<Long, Long> recentlyIngestedMessageIds = new LinkedHashMap<>();
+    private long nextMessageDedupeCleanupAt;
 
     public MarkovManager() {
         this(null);
@@ -29,6 +36,43 @@ public class MarkovManager {
     MarkovManager(MarkovConfig config, Path brainDir) {
         this.config = config;
         this.brainDir = brainDir;
+    }
+
+    /**
+     * Claims a human Discord message for ingestion into this shared manager.
+     * Returns false when another listener already claimed it recently.
+     */
+    public synchronized boolean claimMessageForIngestion(long messageId) {
+        long now = System.currentTimeMillis();
+        Long previouslyIngestedAt = recentlyIngestedMessageIds.get(messageId);
+        if (previouslyIngestedAt != null) {
+            if (now - previouslyIngestedAt < MESSAGE_DEDUPE_TTL_MS) {
+                return false;
+            }
+            recentlyIngestedMessageIds.remove(messageId);
+        }
+
+        if (now >= nextMessageDedupeCleanupAt) {
+            long cutoff = now - MESSAGE_DEDUPE_TTL_MS;
+            Iterator<Map.Entry<Long, Long>> entries = recentlyIngestedMessageIds.entrySet().iterator();
+            while (entries.hasNext()) {
+                if (entries.next().getValue() < cutoff) {
+                    entries.remove();
+                }
+            }
+            nextMessageDedupeCleanupAt = now + MESSAGE_DEDUPE_CLEANUP_INTERVAL_MS;
+        }
+
+        while (recentlyIngestedMessageIds.size() >= MAX_DEDUPED_MESSAGE_IDS) {
+            Iterator<Long> oldestIds = recentlyIngestedMessageIds.keySet().iterator();
+            if (!oldestIds.hasNext()) {
+                break;
+            }
+            oldestIds.next();
+            oldestIds.remove();
+        }
+        recentlyIngestedMessageIds.put(messageId, now);
+        return true;
     }
 
     public synchronized void loadBrain(long channelId) {
