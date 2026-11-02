@@ -33,8 +33,11 @@ const systemPrompt = [skill, req.systemPrompt].filter(Boolean).join("\n\n");
 // a fetched URL can carry data out in its query string, and bash/edit/task/
 // external-directory reads are denied outright. Plan mode alone is not
 // enough: it only sets edit/bash to ask, and read defaults to allow.
-if (!req.channelId) {
-  throw new Error("Refusing to create Paseo agent without channelId (read confinement requires it)");
+if (typeof req.channelId !== "string" || !/^\d+$/.test(req.channelId)) {
+  // A JSON number here is already lossy: JS Numbers cannot hold a Discord
+  // snowflake exactly, so a numeric channelId would confine reads to a
+  // rounded, wrong channel dir. Refuse rather than run unconfined/wrong.
+  throw new Error("Refusing to create Paseo agent without a string channelId (read confinement requires it)");
 }
 const channelDir = `data/markov/${req.channelId}`;
 const readAllow = { "*": "deny", [`${channelDir}/**`]: "allow", [`**/${channelDir}/**`]: "allow" };

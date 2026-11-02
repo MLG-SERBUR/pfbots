@@ -47,7 +47,22 @@ class PaseoDaemonResponderTest {
                 List.of(bridge.toString()), "opencode/test-model", null);
         responder.generateReply(new GenerativeAiRequest(
                 List.of("hi"), null, List.of(), 12345L)).get();
-        assertTrue(Files.readString(capture).contains("\"channelId\":12345"));
+        assertTrue(Files.readString(capture).contains("\"channelId\":\"12345\""));
+    }
+
+    @Test
+    void passesSnowflakeChannelIdExactlyNotRounded(@TempDir Path dir) throws Exception {
+        // Discord snowflakes exceed 2^53: as a JS Number, 1349083001275027559
+        // rounds to 1349083001275027500 and confines reads to the wrong dir.
+        Path capture = dir.resolve("request.json");
+        Path bridge = fakeBridge(dir, capture, "#!/bin/sh\ncat > CAPTURE\nprintf '{\"reply\":\"ok\"}'\n");
+        PaseoDaemonResponder responder = new PaseoDaemonResponder(
+                List.of(bridge.toString()), "opencode/test-model", null);
+        responder.generateReply(new GenerativeAiRequest(
+                List.of("hi"), null, List.of(), 1349083001275027559L)).get();
+        String sent = Files.readString(capture);
+        assertTrue(sent.contains("\"channelId\":\"1349083001275027559\""));
+        assertTrue(!sent.contains("1349083001275027500"));
     }
 
     @Test

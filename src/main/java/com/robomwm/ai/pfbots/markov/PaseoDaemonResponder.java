@@ -63,7 +63,11 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
         if (cwd != null) json.put("cwd", cwd);
         // Channel id drives the bridge's read confinement: without it the
         // bridge refuses to create the agent rather than running unconfined.
-        if (request.channelId() != null) json.put("channelId", request.channelId());
+        // Sent as a STRING, not a JSON number: Discord snowflakes exceed
+        // 2^53, and a JS Number silently rounds them (1349083001275027559
+        // becomes 1349083001275027500), which would confine the agent to
+        // the wrong channel dir and deny the real one.
+        if (request.channelId() != null) json.put("channelId", request.channelId().toString());
         json.put("prompt", prompt);
         ArrayNode images = json.putArray("images");
         for (VisionImage image : request.images()) {
