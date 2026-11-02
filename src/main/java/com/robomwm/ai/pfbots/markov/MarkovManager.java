@@ -301,6 +301,25 @@ public class MarkovManager {
         return Files.exists(getAiLogPath(channelId));
     }
 
+    /**
+     * Line count of the channel's AI log, for the Paseo prompt only: the
+     * agent reads the tail itself, and OpenCode's read has no backwards
+     * read, so it needs the total to compute a tail offset. Returns -1
+     * when the file is missing or unreadable, so the caller omits it.
+     */
+    public synchronized long countAiLogLines(long channelId) {
+        Path path = getAiLogPath(channelId);
+        if (!Files.exists(path)) {
+            return -1;
+        }
+        try (var lines = Files.lines(path)) {
+            return lines.count();
+        } catch (IOException e) {
+            System.err.println("Failed to count AI log lines for channel " + channelId + ": " + e.getMessage());
+            return -1;
+        }
+    }
+
     public synchronized void ensureChatLogInitialized(long channelId) {
         Path chatLogPath = getChatLogPath(channelId);
         if (Files.exists(chatLogPath)) {

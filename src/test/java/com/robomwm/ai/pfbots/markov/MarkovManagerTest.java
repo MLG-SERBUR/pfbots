@@ -152,4 +152,15 @@ class MarkovManagerTest {
         assertTrue(manager.getRecentMessagesForAiUntilTokenBudget(123L, 8000).isEmpty());
         assertTrue(manager.getRecentMessagesForAiUntilTokenBudget(123L, 0).isEmpty());
     }
+
+    @Test
+    void countAiLogLinesCountsAppendedLinesAndMissingFile() {
+        MarkovManager manager = new MarkovManager(null, tempDir);
+
+        assertEquals(-1, manager.countAiLogLines(123L));
+        manager.appendToAiLog(123L, "one");
+        manager.appendToAiLog(123L, "two");
+        manager.appendToAiLog(123L, "three");
+        assertEquals(3, manager.countAiLogLines(123L));
+    }
 }

@@ -592,7 +592,12 @@ public class MarkovListener extends ListenerAdapter {
         String systemPrompt = resolvePrompt(paseo.getSystemPrompt(), event.getGuild());
         StringBuilder prompt = new StringBuilder();
         prompt.append("Channel ID: ").append(channelId).append("\n");
-        prompt.append("AI log: data/markov/").append(channelId).append("/ai.log\n");
+        prompt.append("AI log: data/markov/").append(channelId).append("/ai.log");
+        long aiLogLines = manager.countAiLogLines(channelId);
+        if (aiLogLines >= 0) {
+            prompt.append(" (").append(aiLogLines).append(" lines)");
+        }
+        prompt.append("\n");
         prompt.append("Cached images: data/markov/").append(channelId).append("/images/<imageId>.<ext>\n");
         prompt.append("Triggering message: ").append(content).append("\n");
         if (referencedMessage != null) {
