@@ -108,4 +108,12 @@ class VisionOnDemandTest {
         String injected = MarkovListener.injectReplyContext(line, context);
         assertEquals("<🐧> (replying to MasterOE: \"Thoughts? [image id=123 file=reading_order.png]\") @MasterOEbot can you read this image, what does it say?", injected);
     }
+
+    @Test
+    void imageCachePathUsesIdAndFileExtension() {
+        MarkovListener.PendingImage image = new MarkovListener.PendingImage("12345", "photo.JPG", "image/jpeg", 100, "https://example.invalid/photo.JPG");
+        assertEquals("data/markov/999/images/12345.jpg", MarkovListener.imageCachePath(999, image).toString().replace('\\', '/'));
+        MarkovListener.PendingImage noExt = new MarkovListener.PendingImage("7", "blob", "image/webp", 100, "https://example.invalid/blob");
+        assertEquals("data/markov/999/images/7.webp", MarkovListener.imageCachePath(999, noExt).toString().replace('\\', '/'));
+    }
 }

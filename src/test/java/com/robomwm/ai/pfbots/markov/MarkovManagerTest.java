@@ -62,7 +62,7 @@ class MarkovManagerTest {
 
         assertEquals(List.of("<MasterOEBot> hello there"), manager.getRecentMessagesForAi(channelId, 500));
         assertTrue(manager.getRecentMessages(channelId, 500).isEmpty());
-        assertTrue(Files.notExists(tempDir.resolve(channelId + ".brain")));
+        assertTrue(Files.notExists(tempDir.resolve(String.valueOf(channelId)).resolve("brain")));
         assertTrue(manager.generateReply(channelId).isEmpty());
     }
 
@@ -76,7 +76,7 @@ class MarkovManagerTest {
         // Should not fall back to brain anymore if log is initialized (even if empty)
         manager.ensureAiLogInitialized(channelId);
         assertTrue(manager.getRecentMessagesForAi(channelId, 500).isEmpty());
-        assertTrue(Files.exists(tempDir.resolve(channelId + ".ai.log")));
+        assertTrue(Files.exists(tempDir.resolve(String.valueOf(channelId)).resolve("ai.log")));
     }
 
     @Test

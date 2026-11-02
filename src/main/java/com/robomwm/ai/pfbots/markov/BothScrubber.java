@@ -26,8 +26,18 @@ public class BothScrubber {
             return;
         }
 
-        File[] brainFiles = folder.listFiles((dir, name) -> name.endsWith(".brain"));
-        File[] aiLogFiles = folder.listFiles((dir, name) -> name.endsWith(".ai.log"));
+        // Per-channel layout: data/markov/<channelId>/brain and ai.log
+        File[] dirs = folder.listFiles(File::isDirectory);
+        List<File> brainFiles = new ArrayList<>();
+        List<File> aiLogFiles = new ArrayList<>();
+        if (dirs != null) {
+            for (File dir : dirs) {
+                File brain = new File(dir, "brain");
+                if (brain.exists()) brainFiles.add(brain);
+                File log = new File(dir, "ai.log");
+                if (log.exists()) aiLogFiles.add(log);
+            }
+        }
 
         System.out.println("Starting total scrub (" + (deleteMode ? "DELETE" : "CHECK") + " mode)...");
         AtomicInteger totalMatches = new AtomicInteger(0);

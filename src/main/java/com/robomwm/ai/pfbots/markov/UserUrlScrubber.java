@@ -13,7 +13,8 @@ import java.util.regex.Pattern;
 
 /**
  * Utility to scrub URLs shared by a specific user from brain logs.
- * It gathers URLs from the .ai.log and removes lines containing them from the .brain log.
+ * It gathers URLs from the per-channel ai.log and removes lines containing
+ * them from the same channel's brain file.
  */
 public class UserUrlScrubber {
     private static final String BRAIN_DIR = "data/markov";
@@ -42,9 +43,17 @@ public class UserUrlScrubber {
             return;
         }
 
-        File[] logFiles = folder.listFiles((dir, name) -> name.endsWith(".ai.log"));
-        if (logFiles == null || logFiles.length == 0) {
-            System.out.println("No .ai.log files found.");
+        // Per-channel layout: data/markov/<channelId>/ai.log
+        File[] dirs = folder.listFiles(File::isDirectory);
+        List<File> logFiles = new ArrayList<>();
+        if (dirs != null) {
+            for (File dir : dirs) {
+                File log = new File(dir, "ai.log");
+                if (log.exists()) logFiles.add(log);
+            }
+        }
+        if (logFiles.isEmpty()) {
+            System.out.println("No ai.log files found.");
             return;
         }
 
@@ -65,9 +74,8 @@ public class UserUrlScrubber {
     }
 
     private static int processChannel(File logFile, String userPrefix, boolean deleteMode) {
-        String fileName = logFile.getName();
-        String channelId = fileName.substring(0, fileName.lastIndexOf(".ai.log"));
-        File brainFile = new File(logFile.getParent(), channelId + ".brain");
+        String channelId = logFile.getParentFile().getName();
+        File brainFile = new File(logFile.getParent(), "brain");
 
         if (!brainFile.exists()) {
             return 0;

@@ -26,9 +26,17 @@ public class AiLogScrubber {
             return;
         }
 
-        File[] files = folder.listFiles((dir, name) -> name.endsWith(".ai.log"));
-        if (files == null || files.length == 0) {
-            System.out.println("No .ai.log files found.");
+        // Per-channel layout: data/markov/<channelId>/ai.log
+        File[] dirs = folder.listFiles(File::isDirectory);
+        List<File> files = new ArrayList<>();
+        if (dirs != null) {
+            for (File dir : dirs) {
+                File log = new File(dir, "ai.log");
+                if (log.exists()) files.add(log);
+            }
+        }
+        if (files.isEmpty()) {
+            System.out.println("No ai.log files found.");
             return;
         }
 

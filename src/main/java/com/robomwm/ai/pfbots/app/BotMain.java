@@ -18,9 +18,11 @@ import com.robomwm.ai.pfbots.markov.ArliAiCoordinator;
 import com.robomwm.ai.pfbots.markov.ArliAiReactionResponder;
 import com.robomwm.ai.pfbots.markov.ArliAiSecondChanceResponder;
 import com.robomwm.ai.pfbots.markov.GenerativeAiConfig;
+import com.robomwm.ai.pfbots.markov.GenerativeAiResponder;
 import com.robomwm.ai.pfbots.markov.MarkovConfig;
 import com.robomwm.ai.pfbots.markov.MarkovListener;
 import com.robomwm.ai.pfbots.markov.MarkovManager;
+import com.robomwm.ai.pfbots.markov.PaseoDaemonResponder;
 import com.robomwm.ai.pfbots.markov.RoundRobinGenerativeAiResponder;
 import com.robomwm.ai.pfbots.masteroebot.MasterOEBotCommands;
 import com.robomwm.ai.pfbots.masteroebot.connect4.Connect4CommandListener;
@@ -39,6 +41,9 @@ import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
 public class BotMain {
+    /** Paseo provider/model for main replies. GLM-5.3-Flash Free, limited-time free in OpenCode. */
+    private static final String PASEO_PROVIDER = "opencode/glm-5.3-flash-free";
+
     public static void main(String[] args) {
         try {
             runBot(args);
@@ -116,9 +121,17 @@ public class BotMain {
                 continue;
             }
 
-            // Per-bot voice, shared provider backend (keys from ai.yaml/env, models in code).
-            RoundRobinGenerativeAiResponder generativeAiResponder =
-                    new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
+            // Main replies only, toggled in code, not by env var (owner
+            // instruction). Paseo is the live path; the RoundRobin line below
+            // is the toggle back, and RoundRobinGenerativeAiResponder stays in
+            // the repo untouched. Model is still TBD: set PASEO_PROVIDER to
+            // "opencode/<model>" when the owner picks one.
+            // Toggle back: replace the PaseoDaemonResponder line with:
+            //   generativeAiResponder = new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
+            GenerativeAiResponder generativeAiResponder = new PaseoDaemonResponder(
+                    List.of("node", "paseo-bridge/paseo-bridge.mjs"),
+                    PASEO_PROVIDER, profile.systemPrompt());
+            System.out.println("[" + profile.displayName() + "] Main replies via Paseo daemon: " + PASEO_PROVIDER);
             // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
             RoundRobinGenerativeAiResponder visionResponder =
                     RoundRobinGenerativeAiResponder.visionResponder(aiConfig);
@@ -193,7 +206,7 @@ public class BotMain {
 
     private static BootResult startBot(BotProfile profile, String token, boolean enableMessageContent,
                                         MarkovManager markovManager, MarkovConfig markovConfig,
-                                        RoundRobinGenerativeAiResponder generativeAiResponder,
+                                        GenerativeAiResponder generativeAiResponder,
                                         ArliAiReactionResponder reactionResponder,
                                         ArliAiSecondChanceResponder secondChanceResponder,
                                         ArliAiCoordinator coordinator,

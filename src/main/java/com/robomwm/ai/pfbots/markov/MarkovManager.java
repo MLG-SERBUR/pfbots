@@ -13,8 +13,10 @@ public class MarkovManager {
     private static final int MAX_DEDUPED_MESSAGE_IDS = 100_000;
     public static final String BOT_MESSAGE_PREFIX = "<MasterOEBot> ";
     private static final String BOT_MESSAGE_TAG = BOT_MESSAGE_PREFIX.trim();
-    private static final String BRAIN_EXTENSION = ".brain";
-    private static final String AI_LOG_EXTENSION = ".ai.log";
+    // Per-channel layout: data/markov/<channelId>/brain and ai.log.
+    // Chat log is debugging only and lives elsewhere, never in this dir.
+    private static final String BRAIN_FILE = "brain";
+    private static final String AI_LOG_FILE = "ai.log";
     private static final String CHAT_LOG_EXTENSION = ".chat.log";
     private final MarkovConfig config;
     private final Path brainDir;
@@ -176,10 +178,11 @@ public class MarkovManager {
     }
 
     /**
-     * Permanent chat log ({@code <channelId>.chat.log}) in the same
+     * Permanent chat log, debugging only, in the same
      * {@code <DisplayName> message} format as the AI log, but never scrubbed.
      * Retains {@code <MasterOEBot>} lines so bot output can later refine the
      * system prompt. Scrubbers and {@link #scrubAiLog} never touch this file.
+     * It is NOT given to the AI; see {@link #getChatLogPath}.
      */
     public synchronized void appendToChatLog(long channelId, String authorName, String message) {
         if (message == null || message.trim().isEmpty()) return;
@@ -530,15 +533,16 @@ public class MarkovManager {
     }
 
     private Path getBrainPath(long channelId) {
-        return brainDir.resolve(channelId + BRAIN_EXTENSION);
+        return brainDir.resolve(String.valueOf(channelId)).resolve(BRAIN_FILE);
     }
 
     private Path getAiLogPath(long channelId) {
-        return brainDir.resolve(channelId + AI_LOG_EXTENSION);
+        return brainDir.resolve(String.valueOf(channelId)).resolve(AI_LOG_FILE);
     }
 
+    /** Debugging only, kept out of the per-channel AI dir: data/chat-logs/<channelId>.chat.log. */
     Path getChatLogPath(long channelId) {
-        return brainDir.resolve(channelId + CHAT_LOG_EXTENSION);
+        return brainDir.resolveSibling("chat-logs").resolve(channelId + CHAT_LOG_EXTENSION);
     }
 
     private JMegaHal newBrain(long channelId) {

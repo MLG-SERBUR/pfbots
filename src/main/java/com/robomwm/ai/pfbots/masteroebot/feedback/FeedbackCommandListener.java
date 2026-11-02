@@ -19,7 +19,7 @@ import net.dv8tion.jda.api.requests.restaction.CommandListUpdateAction;
 public class FeedbackCommandListener extends ListenerAdapter {
     // Confirmation lines in early main-channel voice: earnest, "man"
     // everywhere, short fragments. Sampled from the first ~140 lines of
-    // data/markov/1349083001275027559.chat.log ("proud of you man",
+    // data/chat-logs/1349083001275027559.chat.log ("proud of you man",
     // "we're here for you man", "Good one?", "you really are the top 1 pengi").
     static final List<String> REPLIES = List.of(
             "noted man, proud of you ngl",

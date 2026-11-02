@@ -18,6 +18,10 @@ import net.dv8tion.jda.api.hooks.ListenerAdapter;
 
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.*;
@@ -123,6 +127,33 @@ public class MarkovListener extends ListenerAdapter {
         } else {
             return context + currentMessageLine;
         }
+    }
+
+    /** Cached image on disk, so a later agent run can open it from the log reference alone. */
+    static Path imageCachePath(long channelId, PendingImage image) {
+        return Paths.get("data", "markov", String.valueOf(channelId), "images",
+                image.id() + "." + imageCacheExtension(image));
+    }
+
+    static String imageCacheExtension(PendingImage image) {
+        String name = image.fileName() == null ? "" : image.fileName().toLowerCase(Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        if (dot != -1) {
+            String ext = name.substring(dot + 1);
+            if (ext.equals("png") || ext.equals("jpg") || ext.equals("jpeg") || ext.equals("webp") || ext.equals("gif")) {
+                return ext;
+            }
+        }
+        if (image.contentType() != null) {
+            return switch (image.contentType().toLowerCase(Locale.ROOT)) {
+                case "image/png" -> "png";
+                case "image/jpeg" -> "jpg";
+                case "image/webp" -> "webp";
+                case "image/gif" -> "gif";
+                default -> "png";
+            };
+        }
+        return "png";
     }
 
     static List<PendingImage> imageAttachments(Message message) {
@@ -320,11 +351,16 @@ public class MarkovListener extends ListenerAdapter {
         String rawContent = MarkovUtils.getDisplayNameContent(message);
         final String content = rawContent == null ? "" : rawContent;
 
-        // Record image metadata only. Bytes are downloaded later, and only
-        // if the text model outputs NEED_VISION for that image.
+        // Record image metadata, and cache bytes on arrival: a later Paseo
+        // run can open an older image from its log reference alone, without
+        // a request loop or a live Discord URL. On-demand download is still
+        // used for triggering/referenced images on the Paseo reply itself.
         List<PendingImage> images = imageAttachments(message);
         rememberImages(images);
         rememberImages(imageAttachments(message.getReferencedMessage()));
+        for (PendingImage image : images) {
+            cacheImage(channelId, image);
+        }
         String logContent = formatMessageContentWithImages(content, images);
 
         if ((content.trim().isEmpty() && images.isEmpty()) || content.trim().startsWith("!")) {
@@ -550,7 +586,77 @@ public class MarkovListener extends ListenerAdapter {
         }
     }
 
+    private void sendPaseoReply(MessageReceivedEvent event, long channelId, String content,
+                                Message referencedMessage, PaseoDaemonResponder paseo) {
+        List<ScheduledFuture<?>> typingTasks = startTypingIndefinite(event);
+        String systemPrompt = resolvePrompt(paseo.getSystemPrompt(), event.getGuild());
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Channel ID: ").append(channelId).append("\n");
+        prompt.append("AI log: data/markov/").append(channelId).append("/ai.log\n");
+        prompt.append("Cached images: data/markov/").append(channelId).append("/images/<imageId>.<ext>\n");
+        prompt.append("Triggering message: ").append(content).append("\n");
+        if (referencedMessage != null) {
+            prompt.append("Replying to: ").append(MarkovUtils.getDisplayNameContent(referencedMessage)).append("\n");
+        }
+
+        List<PendingImage> pending = new ArrayList<>();
+        pending.addAll(imageAttachments(event.getMessage()));
+        pending.addAll(imageAttachments(referencedMessage));
+        List<CompletableFuture<VisionImage>> downloads = new ArrayList<>();
+        for (PendingImage image : pending) {
+            downloads.add(downloadImage(image).thenApply(bytes -> {
+                String mime = image.contentType() != null && !image.contentType().isBlank()
+                        ? image.contentType() : "image/png";
+                return new VisionImage(Base64.getEncoder().encodeToString(bytes), mime);
+            }).exceptionally(err -> {
+                System.err.println("Paseo image download failed for " + image.id() + ": " + err.getMessage());
+                return null;
+            }));
+        }
+        CompletableFuture.allOf(downloads.toArray(new CompletableFuture[0]))
+                .thenApply(ignored -> {
+                    List<VisionImage> images = new ArrayList<>();
+                    for (CompletableFuture<VisionImage> d : downloads) {
+                        VisionImage img = d.getNow(null);
+                        if (img != null) images.add(img);
+                    }
+                    return images;
+                })
+                .thenCompose(images -> paseo.generateReply(
+                        new GenerativeAiRequest(List.of(prompt.toString()), systemPrompt, images, channelId)))
+                .whenComplete((reply, error) -> {
+                    stopTyping(typingTasks);
+                    if (error != null) {
+                        logGenerativeAiFailure(channelId, error);
+                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        return;
+                    }
+                    String safeReply = escapeMassMentions(resolveGuildEmoji(event.getGuild(),
+                            sanitizeOutput(MarkovManager.stripBotPrefix(reply))));
+                    if (safeReply == null || safeReply.trim().isEmpty()) {
+                        logGenerativeAiFailure(channelId, new IllegalStateException("Paseo reply was empty"));
+                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        return;
+                    }
+                    event.getChannel().sendMessage(safeReply)
+                            .setAllowedMentions(Collections.emptyList())
+                            .queue(success -> {
+                                trackAiMessage(channelId, safeReply);
+                                scheduleSecondReply(event, channelId, content);
+                            });
+                });
+    }
+
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
+        // Paseo path only: no timeout (owner instruction), no history sent by
+        // Java, no NEED_VISION marker. The agent reads data/markov logs itself
+        // per paseo-bridge/pfbots-chat-skill.md, and triggering/referenced
+        // images are attached natively via the SDK. Second-chance and
+        // reaction paths are untouched and keep their own timeouts.
+        if (generativeAiResponder instanceof PaseoDaemonResponder paseo) {
+            sendPaseoReply(event, channelId, content, referencedMessage, paseo);
+            return;
+        }
         TypingSession typing = new TypingSession(event, scheduler);
         typing.pulse();
 
@@ -771,6 +877,23 @@ public class MarkovListener extends ListenerAdapter {
                     }
                     return bytes;
                 });
+    }
+
+    /** Fire-and-forget: a failed cache never blocks the reply, it just leaves that id uncached. */
+    private void cacheImage(long channelId, PendingImage image) {
+        Path path = imageCachePath(channelId, image);
+        if (Files.exists(path)) return;
+        downloadImage(image).thenAccept(bytes -> {
+            try {
+                Files.createDirectories(path.getParent());
+                Files.write(path, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            } catch (Exception e) {
+                System.err.println("Image cache write failed for " + image.id() + ": " + e.getMessage());
+            }
+        }).exceptionally(err -> {
+            System.err.println("Image cache download failed for " + image.id() + ": " + err.getMessage());
+            return null;
+        });
     }
 
     private final Set<String> seenReactionCandidates = ConcurrentHashMap.newKeySet();
@@ -1205,6 +1328,13 @@ public class MarkovListener extends ListenerAdapter {
             closed = true;
             stop();
         }
+    }
+
+    /** Typing indicator that repeats until stopTyping, for the no-timeout Paseo path. */
+    private List<ScheduledFuture<?>> startTypingIndefinite(MessageReceivedEvent event) {
+        event.getChannel().sendTyping().queue();
+        return List.of(scheduler.scheduleAtFixedRate(
+                () -> event.getChannel().sendTyping().queue(), 8, 8, TimeUnit.SECONDS));
     }
 
     private List<ScheduledFuture<?>> startTyping(MessageReceivedEvent event, int delaySeconds) {

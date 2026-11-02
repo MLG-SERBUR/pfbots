@@ -26,9 +26,17 @@ public class BrainScrubber {
             return;
         }
 
-        File[] files = folder.listFiles((dir, name) -> name.endsWith(".brain"));
-        if (files == null || files.length == 0) {
-            System.out.println("No .brain files found.");
+        // Per-channel layout: data/markov/<channelId>/brain
+        File[] dirs = folder.listFiles(File::isDirectory);
+        List<File> files = new ArrayList<>();
+        if (dirs != null) {
+            for (File dir : dirs) {
+                File brain = new File(dir, "brain");
+                if (brain.exists()) files.add(brain);
+            }
+        }
+        if (files.isEmpty()) {
+            System.out.println("No brain files found.");
             return;
         }
 
