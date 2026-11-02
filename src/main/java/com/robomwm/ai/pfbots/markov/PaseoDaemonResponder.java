@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A GenerativeAiResponder backed by a Paseo daemon over its API, not the
@@ -18,13 +19,19 @@ import java.util.concurrent.CompletionException;
  * <p>Java does not speak the daemon protocol directly (there is no Java SDK),
  * so each reply runs the small Node bridge in paseo-bridge/, which uses the
  * official @getpaseo/client SDK: one agent per reply, outputSchema {reply},
- * autoArchive, images passed through as {data: base64, mimeType}. The bridge
+ * images passed through as {data: base64, mimeType}. Sessions are not
+ * archived on finish; the bridge keeps the newest 10 unarchived sessions
+ * in the workspace and archives the oldest excess, and archives all
+ * existing pfbots sessions once on the first reply after bot start. The bridge
  * is one-shot (stdin request, stdout reply, exit), so there is no long-lived
  * client connection for Java to manage or restart. Any bridge failure throws,
  * and MarkovListener falls back to Markov, same as any other AI failure.
  */
 public class PaseoDaemonResponder implements GenerativeAiResponder {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    // Static, not per-instance: both bots share one JVM, and the startup
+    // archive must run exactly once per bot start, not once per bot.
+    private static final AtomicBoolean STARTUP_ARCHIVE_SENT = new AtomicBoolean(false);
 
     private final List<String> bridgeCommand;
     private final String provider;
@@ -68,6 +75,7 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
         // becomes 1349083001275027500), which would confine the agent to
         // the wrong channel dir and deny the real one.
         if (request.channelId() != null) json.put("channelId", request.channelId().toString());
+        if (STARTUP_ARCHIVE_SENT.compareAndSet(false, true)) json.put("archiveExisting", true);
         json.put("prompt", prompt);
         ArrayNode images = json.putArray("images");
         for (VisionImage image : request.images()) {
