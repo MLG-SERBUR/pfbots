@@ -10,6 +10,10 @@
 # OS files
 .DS_Store
 
+# Node bridge dependencies (installed by `cd paseo-bridge && npm install`;
+# package-lock.json is intentionally NOT ignored, commit it for reproducible installs)
+paseo-bridge/node_modules/
+
 # Runtime/config secrets
 ai.yaml
 dumcord.yml
