@@ -22,8 +22,10 @@ const req = JSON.parse(input);
 // paseoSystemPrompt) and is used exactly as sent: no concatenation
 // here, no file read, no bridge-side instructions. That prompt is plain
 // system-prompt text, NOT an OpenCode skill: there is no skill tool call
-// for it in a session export, and the provider's `skill` tool stays
-// denied in the permission map below.
+// for it in a session export. Skills are denied in the permission map
+// below, as a pattern map ({"*": "deny"}) — the form OpenCode's skill
+// docs use — not the bare "deny" that was there before and did not stop
+// the agent trying to use the user's installed OpenCode skills.
 const systemPrompt = req.systemPrompt || "";
 // Read confinement, fail closed: no channelId means no agent. The agent may
 // only read this channel's dir (ai.log + cached images). OpenCode permission
@@ -54,11 +56,17 @@ const options = {
     task: "deny",
     external_directory: "deny",
     lsp: "deny",
-    skill: "deny",
+    skill: { "*": "deny" },
     todowrite: "deny",
     question: "deny",
     webfetch: "deny",
     websearch: "allow",
+    // Remaining OpenCode tools from Paseo's provider-options doc: none
+    // of these are needed to read a log and return a reply.
+    codesearch: "deny",
+    doom_loop: "deny",
+    repo_clone: "deny",
+    repo_overview: "deny",
   },
 };
 const client = createPaseoClient({
@@ -105,12 +113,15 @@ try {
       console.error(`Startup session archive failed: ${err && err.message ? err.message : err}`);
     }
   }
-  // Plan mode: OpenCode's read-only mode, so the agent can read logs and
-  // cached images but cannot write files or run edits. The daemon validates
-  // modeId against its own provider modes; if it rejects "plan", drop this
-  // field (or pass req.modeId) rather than switching to a write mode.
+  // No modeId on purpose, and never "plan" again: plan mode made the
+  // agent treat the job as presenting a plan for sending a Discord
+  // message itself, and that plan text then leaked to Discord as the
+  // reply (see the strict reply parsing below). The agent's job is only
+  // to return reply text through the schema; Java sends it to Discord.
+  // Write/execute protection comes from the permission map above
+  // (edit/bash/task denied), not from plan mode.
   agent = await workspace.agents.create({
-    config: { provider: req.provider, systemPrompt, modeId: req.modeId || "plan", options },
+    config: { provider: req.provider, systemPrompt, options },
     prompt: req.prompt,
     images: req.images && req.images.length > 0 ? req.images : undefined,
     outputSchema: {
@@ -130,14 +141,20 @@ try {
   if (result.status !== "idle" || !result.lastMessage) {
     throw new Error(result.error || `Paseo turn ended with status ${result.status} and no message`);
   }
-  let reply = result.lastMessage;
+  // Strict schema only: the last message must be {"reply": "..."}.
+  // The old raw-text fallback is what sent a plan-mode plan to Discord
+  // verbatim ("Plan mode — read-only. Next step was sending Discord
+  // message..."). A non-schema answer is a failed turn, not a reply:
+  // throw so Java falls back to Markov instead of posting agent
+  // meta-text to the channel.
+  let reply = null;
   try {
     const parsed = JSON.parse(result.lastMessage);
     if (typeof parsed.reply === "string") reply = parsed.reply;
   } catch {
-    // Provider ignored the schema; use its raw text as the reply.
+    // Not schema JSON: fail, do not use raw text.
   }
-  if (!reply || !reply.trim()) throw new Error("Paseo returned an empty reply");
+  if (!reply || !reply.trim()) throw new Error("Paseo returned no schema reply (last message was not {\"reply\": \"...\"})");
   // Rolling retention: keep the newest 10 unarchived sessions in this
   // workspace, archive the oldest excess (the current session is newest,
   // so it is never the one archived here). Prune after the reply, so a

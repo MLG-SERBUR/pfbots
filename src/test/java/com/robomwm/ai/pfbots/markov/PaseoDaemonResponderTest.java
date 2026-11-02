@@ -21,6 +21,11 @@ class PaseoDaemonResponderTest {
         assertTrue(instructions != null && !instructions.isBlank());
         assertTrue(instructions.contains("data/markov/<channelId>/ai.log"));
         assertTrue(instructions.contains("reply schema"));
+        // Regression for the 2026-11-01 plan leak: the agent must return
+        // a reply for Java to send, never present a plan or send itself,
+        // and must not use OpenCode skills.
+        assertTrue(instructions.contains("You do NOT send a message anywhere"));
+        assertTrue(instructions.contains("Do not load or use any skill"));
     }
 
     private static Path fakeBridge(Path dir, Path capture, String script) throws Exception {
