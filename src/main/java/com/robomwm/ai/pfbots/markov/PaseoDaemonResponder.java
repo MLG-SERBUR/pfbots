@@ -19,10 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Java does not speak the daemon protocol directly (there is no Java SDK),
  * so each reply runs the small Node bridge in paseo-bridge/, which uses the
  * official @getpaseo/client SDK: one agent per reply, outputSchema {reply},
- * images passed through as {data: base64, mimeType}. Sessions are not
- * archived on finish; the bridge keeps the newest 10 unarchived sessions
- * in the workspace and archives the oldest excess, and archives all
- * existing pfbots sessions once on the first reply after bot start. The bridge
+ * images passed through as {data: base64, mimeType}. Sessions are
+ * archived on finish, so no agent tabs are left open, and all existing
+ * pfbots sessions are archived once on the first reply after bot start. The bridge
  * is one-shot (stdin request, stdout reply, exit), so there is no long-lived
  * client connection for Java to manage or restart. Any bridge failure throws,
  * and MarkovListener falls back to Markov, same as any other AI failure.

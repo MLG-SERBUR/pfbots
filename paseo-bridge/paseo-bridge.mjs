@@ -6,9 +6,10 @@
 // Request: { provider: "opencode/<model>", systemPrompt, prompt, images: [{data, mimeType}], cwd, timeoutMs, archiveExisting }
 // archiveExisting (first reply after bot start only, sent by Java): archive
 // every existing pfbots session before creating the new one, clearing the
-// pile built up before this change. Sessions are otherwise NOT archived on
-// finish: they stay visible until more than 10 unarchived pfbots sessions
-// exist in the workspace, then the oldest are archived, keeping the newest 10.
+// pile built up before this change. Sessions are archived on finish:
+// after a successful reply every pfbots session in the workspace, the
+// current one included, is archived, so no agent tabs are left open.
+// Failed turns throw before that step, so their tabs stay for debugging.
 // Reply:   { reply: "<final chat reply>" }
 // ponytail: images[].data is raw base64 from VisionImage, not a data URI, because
 // the SDK type carries mimeType separately. Verify against the live daemon if a
@@ -79,7 +80,8 @@ async function listPfbotsSessions() {
   const result = await client.agents.list({
     filter: { labels: { source: "pfbots" }, includeArchived: false },
     sort: [{ key: "created_at", direction: "asc" }],
-    page: { limit: 500 },
+    // SDK max is 200: 500 threw ZodError, silently breaking every archive.
+    page: { limit: 200 },
   });
   return (result.entries || []).map((e) => e.agent || e).filter((a) => a && a.id);
 }
@@ -98,8 +100,8 @@ try {
   // left a workspace behind. workspaces.open reuses the active workspace
   // for a directory or creates it, and workspace.agents.create then puts
   // each reply's session inside that same workspace. Sessions stay
-  // separate (one per reply, archived after it finishes, still visible
-  // in the workspace's session list); only the workspace is shared.
+  // separate (one per reply, archived after it finishes, tab closed);
+  // only the workspace is shared.
   // Old workspaces from before this change stay where they are; archive
   // them in the Paseo UI if you want them gone, this does not delete them.
   const workspace = await client.workspaces.open({ cwd: req.cwd || "/tmp" });
@@ -155,19 +157,13 @@ try {
     // Not schema JSON: fail, do not use raw text.
   }
   if (!reply || !reply.trim()) throw new Error("Paseo returned no schema reply (last message was not {\"reply\": \"...\"})");
-  // Rolling retention: keep the newest 10 unarchived sessions in this
-  // workspace, archive the oldest excess (the current session is newest,
-  // so it is never the one archived here). Prune after the reply, so a
+  // Archive on finish: every pfbots session in this workspace, current
+  // one included, so no agent tabs are left open. After the reply, so a
   // prune failure cannot lose an answer that already exists.
   try {
     const sessions = (await listPfbotsSessions())
-      .filter((a) => a.workspaceId === workspace.id)
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    if (sessions.length > 10) {
-      const excess = sessions.slice(0, sessions.length - 10)
-        .map((a) => a.id).filter((id) => id !== agent.id);
-      await archiveSessions(excess);
-    }
+      .filter((a) => a.workspaceId === workspace.id);
+    await archiveSessions(sessions.map((a) => a.id));
   } catch (err) {
     console.error(`Session prune failed: ${err && err.message ? err.message : err}`);
   }
@@ -176,7 +172,7 @@ try {
   console.error(String(err && err.message ? err.message : err));
   process.exitCode = 1;
 } finally {
-  // No agent.archive() here on purpose: the session stays visible until
-  // the rolling prune above archives it once more than 10 exist.
+  // Session already archived in the prune above; failed turns reach
+  // here unarchived on purpose, so their tabs stay for debugging.
   try { await client.close(); } catch {}
 }
