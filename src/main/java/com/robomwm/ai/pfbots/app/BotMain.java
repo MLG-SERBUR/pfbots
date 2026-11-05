@@ -41,8 +41,8 @@ import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
 public class BotMain {
-    /** Paseo provider/model for main replies. GLM-5.3-Flash Free, limited-time free in OpenCode. */
-    private static final String PASEO_PROVIDER = "opencode/glm-5.3-flash-free";
+    /** Paseo provider/model for main replies. Pulse Alpha Free, limited-time free in OpenCode. */
+    private static final String PASEO_PROVIDER = "opencode/pulse-alpha-free";
 
     public static void main(String[] args) {
         try {

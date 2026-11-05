@@ -7,9 +7,9 @@
 // archiveExisting (first reply after bot start only, sent by Java): archive
 // every existing pfbots session before creating the new one, clearing the
 // pile built up before this change. Sessions are archived on finish:
-// after a successful reply every pfbots session in the workspace, the
-// current one included, is archived, so no agent tabs are left open.
-// Failed turns throw before that step, so their tabs stay for debugging.
+// after a successful reply all but the newest 5 pfbots sessions in the
+// workspace are archived, so the last 5 tabs stay open. Failed turns
+// throw before that step, so their tabs stay for debugging.
 // Reply:   { reply: "<final chat reply>" }
 // ponytail: images[].data is raw base64 from VisionImage, not a data URI, because
 // the SDK type carries mimeType separately. Verify against the live daemon if a
@@ -157,13 +157,14 @@ try {
     // Not schema JSON: fail, do not use raw text.
   }
   if (!reply || !reply.trim()) throw new Error("Paseo returned no schema reply (last message was not {\"reply\": \"...\"})");
-  // Archive on finish: every pfbots session in this workspace, current
-  // one included, so no agent tabs are left open. After the reply, so a
-  // prune failure cannot lose an answer that already exists.
+  // Archive on finish: keep the newest 5 tabs open, archive the rest.
+  // After the reply, so a prune failure cannot lose an answer that
+  // already exists.
   try {
     const sessions = (await listPfbotsSessions())
-      .filter((a) => a.workspaceId === workspace.id);
-    await archiveSessions(sessions.map((a) => a.id));
+      .filter((a) => a.workspaceId === workspace.id)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    await archiveSessions(sessions.slice(0, Math.max(0, sessions.length - 5)).map((a) => a.id));
   } catch (err) {
     console.error(`Session prune failed: ${err && err.message ? err.message : err}`);
   }
@@ -172,7 +173,7 @@ try {
   console.error(String(err && err.message ? err.message : err));
   process.exitCode = 1;
 } finally {
-  // Session already archived in the prune above; failed turns reach
-  // here unarchived on purpose, so their tabs stay for debugging.
+  // Old sessions already archived in the prune above; failed turns
+  // reach here unarchived on purpose, so their tabs stay for debugging.
   try { await client.close(); } catch {}
 }
