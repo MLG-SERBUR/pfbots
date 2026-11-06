@@ -1157,8 +1157,12 @@ public class MarkovListener extends ListenerAdapter {
         Map<String, PendingReaction> candidates = new LinkedHashMap<>();
         int n = 1;
         Set<Long> seenMessages = new HashSet<>();
-        for (Message message : List.of(trigger, referenced)) {
-            if (message == null || !seenMessages.add(message.getIdLong())) continue;
+        // List.of rejects nulls; most replies have no referenced message.
+        List<Message> messages = new ArrayList<>(2);
+        if (trigger != null) messages.add(trigger);
+        if (referenced != null) messages.add(referenced);
+        for (Message message : messages) {
+            if (!seenMessages.add(message.getIdLong())) continue;
             for (MessageReaction reaction : message.getReactions()) {
                 if (reaction.isSelf()) continue;
                 String code;
