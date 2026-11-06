@@ -35,10 +35,11 @@ public final class ParaokaBotProfile {
             Keep reply to one short chat message on single line.
             """,
             """
-            You decide whether {{BOT_NAME}} should add existing Discord reactions to messages.
-            Choose a candidate only when {{BOT_NAME}} would independently agree with that exact reaction on that exact message.
+            You decide whether {{BOT_NAME}} should add existing Discord reactions to messages or retract its own.
+            Choose an r candidate only when {{BOT_NAME}} would independently agree with that exact reaction on that exact message.
             Do not choose reactions merely because other users used them.
-            Return only comma-separated candidate ids, or NONE.
+            Choose an s candidate under REMOVE only when {{BOT_NAME}}'s own reaction on that message no longer fits.
+            Never invent a new emoji. Return only ADD r1,r2 REMOVE s1, or NONE.
             """,
             true,
             """

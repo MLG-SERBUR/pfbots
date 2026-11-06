@@ -198,10 +198,11 @@ public class MarkovListener extends ListenerAdapter {
     private static final long REACTION_DEBOUNCE_MAX_SECONDS = 300;
     private static final long REACTION_RATE_LIMIT_DELAY_MS = 1500;
     private static final String REACTION_AI_SYSTEM_PROMPT = """
-            You decide whether MasterOEBot should add existing Discord reactions to messages.
-            Choose a candidate only when MasterOEBot would independently agree with that exact reaction on that exact message.
+            You decide whether MasterOEBot should add existing Discord reactions to messages or retract its own.
+            Choose an r candidate only when MasterOEBot would independently agree with that exact reaction on that exact message.
             Do not choose reactions merely because other users used them.
-            Return only comma-separated candidate ids, or NONE.
+            Choose an s candidate under REMOVE only when MasterOEBot's own reaction on that message no longer fits.
+            Never invent a new emoji. Return only ADD r1,r2 REMOVE s1, or NONE.
             """;
 
     public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda) {
@@ -919,11 +920,18 @@ public class MarkovListener extends ListenerAdapter {
         }
         if (reactionCode == null || reactionCode.isEmpty()) return;
 
-        // Skip emojis the bot already added; nothing to mirror for those.
+        // Snapshot the bot's own reactions on this message: the decider may
+        // retract one of them (sN candidates), not just mirror a new one.
+        List<PendingReaction> ownSnapshot = new ArrayList<>();
+        Map<String, PendingReaction> ownByCode = new LinkedHashMap<>();
         try {
             for (MessageReaction reaction : message.getReactions()) {
-                if (reaction.isSelf() && reactionCode.equals(reaction.getEmoji().getAsReactionCode())) {
-                    return;
+                if (!reaction.isSelf()) continue;
+                String ownCode = reaction.getEmoji().getAsReactionCode();
+                if (ownCode == null || ownCode.isEmpty()) continue;
+                if (ownCode.equals(reactionCode)) return;
+                if (ownByCode.putIfAbsent(ownCode, new PendingReaction(reaction.getEmoji().getFormatted(), reaction.getEmoji())) == null) {
+                    ownSnapshot.add(ownByCode.get(ownCode));
                 }
             }
         } catch (Exception ignored) {
@@ -941,6 +949,15 @@ public class MarkovListener extends ListenerAdapter {
             pendingMessage.reactions.putIfAbsent(
                     reactionCode,
                     new PendingReaction(display, newEmoji));
+            for (PendingReaction own : ownSnapshot) {
+                String ownCode;
+                try {
+                    ownCode = own.emoji().getAsReactionCode();
+                } catch (Exception e) {
+                    continue;
+                }
+                pendingMessage.ownReactions.putIfAbsent(ownCode, own);
+            }
         }
         scheduleDebouncedReactionEvaluation(channelId);
     }
@@ -965,9 +982,12 @@ public class MarkovListener extends ListenerAdapter {
     }
 
     private void evaluatePendingReactions(long channelId) {
+        GenerativeAiResponder responderToUse = reactionResponder != null ? reactionResponder : generativeAiResponder;
+        boolean paseoReaction = responderToUse instanceof PaseoReactionResponder || responderToUse instanceof PaseoDaemonResponder;
         // If second chance is currently awaiting ArliAI, wait and retry after it completes
-        // Keep pending messages queued (do not drain yet) and retry promptly after second chance
-        if (coordinator != null && coordinator.isSecondChanceActive()) {
+        // Keep pending messages queued (do not drain yet) and retry promptly after second chance.
+        // Paseo does not use ArliAI, so it runs concurrently; its Arli fallback waits itself.
+        if (!paseoReaction && coordinator != null && coordinator.isSecondChanceActive()) {
             System.out.println("Reaction evaluation for channel " + channelId + " waiting for second chance to complete before calling ArliAI");
             coordinator.awaitSecondChance().thenRun(() -> {
                 // Retry evaluation after second chance (immediate, not debounced)
@@ -981,6 +1001,7 @@ public class MarkovListener extends ListenerAdapter {
         pendingMessages.sort((a, b) -> Long.compare(b.messageId, a.messageId));
 
         Map<String, PendingReaction> candidatesById = new LinkedHashMap<>();
+        Map<String, PendingReaction> ownById = new LinkedHashMap<>();
         List<String> promptLines = new ArrayList<>();
         promptLines.add("Candidates:");
 
@@ -995,11 +1016,24 @@ public class MarkovListener extends ListenerAdapter {
                         + " message=\"" + sanitizeReactionPromptText(message.content) + "\"");
             }
         }
+        int ownNumber = 1;
+        for (PendingReactionMessage message : pendingMessages) {
+            for (PendingReaction reaction : message.ownReactions.values()) {
+                String ownId = "s" + ownNumber++;
+                ownById.put(ownId, reaction.withMessage(message.channel, message.messageId));
+                if (ownNumber == 2) promptLines.add("Own reactions (retract with REMOVE):");
+                promptLines.add(ownId
+                        + " messageId=" + message.messageId
+                        + " reaction=" + reaction.display
+                        + " message=\"" + sanitizeReactionPromptText(message.content) + "\"");
+            }
+        }
 
-        if (candidatesById.isEmpty()) return;
+        if (candidatesById.isEmpty() && ownById.isEmpty()) return;
 
-        GenerativeAiRequest request = new GenerativeAiRequest(promptLines, resolvePrompt(reactionPrompt, guildForChannel(channelId)));
-        GenerativeAiResponder responderToUse = reactionResponder != null ? reactionResponder : generativeAiResponder;
+        // channelId is required by Paseo for read confinement; messageIds
+        // stay in the prompt lines only as mapping context for the r/s ids.
+        GenerativeAiRequest request = new GenerativeAiRequest(promptLines, resolvePrompt(reactionPrompt, guildForChannel(channelId)), List.of(), channelId);
         CompletableFuture<String> reactionFuture;
         try {
             reactionFuture = responderToUse.generateReply(request);
@@ -1013,11 +1047,14 @@ public class MarkovListener extends ListenerAdapter {
             return;
         }
 
-        long reactionTimeout = (responderToUse instanceof ArliAiReactionResponder) ? ArliAiReactionResponder.getTimeoutSeconds() : REACTION_AI_TIMEOUT_SECONDS;
+        // Paseo, like main replies, has no timeout; a deadline expiring
+        // does not cancel the agent. Arli fallback keeps its 600s bound.
+        CompletableFuture<String> timedFuture = paseoReaction
+                ? reactionFuture
+                : reactionFuture.orTimeout((responderToUse instanceof ArliAiReactionResponder) ? ArliAiReactionResponder.getTimeoutSeconds() : REACTION_AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         // Keep copy for retry
         List<PendingReactionMessage> pendingForRetry = new ArrayList<>(pendingMessages);
-        reactionFuture.orTimeout(reactionTimeout, TimeUnit.SECONDS)
-                .whenComplete((reply, error) -> {
+        timedFuture.whenComplete((reply, error) -> {
                     if (error != null) {
                         logGenerativeAiFailure(channelId, error);
                         Throwable unwrapped = unwrapCompletionException(error);
@@ -1035,19 +1072,31 @@ public class MarkovListener extends ListenerAdapter {
                     }
 
                     List<PendingReaction> agreed = new ArrayList<>();
-                    for (String candidateId : parseReactionCandidateIds(reply)) {
+                    for (String candidateId : parseReactionAddIds(reply)) {
                         PendingReaction reaction = candidatesById.get(candidateId);
                         if (reaction == null) continue;
                         agreed.add(reaction);
                     }
-                    if (agreed.isEmpty()) return;
+                    List<PendingReaction> retract = new ArrayList<>();
+                    for (String ownId : parseReactionRemoveIds(reply)) {
+                        PendingReaction reaction = ownById.get(ownId);
+                        if (reaction == null) continue;
+                        retract.add(reaction);
+                    }
+                    if (agreed.isEmpty() && retract.isEmpty()) return;
                     // Newest-first for rate-limit queue
                     agreed.sort((a, b) -> Long.compare(b.messageId(), a.messageId()));
-                    System.out.println("Queueing " + agreed.size() + " agreed reactions for channel " + channelId + " newest-first with " + REACTION_RATE_LIMIT_DELAY_MS + "ms spacing");
+                    retract.sort((a, b) -> Long.compare(b.messageId(), a.messageId()));
+                    System.out.println("Queueing " + agreed.size() + " agreed reactions and " + retract.size() + " retractions for channel " + channelId + " newest-first with " + REACTION_RATE_LIMIT_DELAY_MS + "ms spacing");
                     for (int i = 0; i < agreed.size(); i++) {
                         PendingReaction reaction = agreed.get(i);
                         long delayMs = i * REACTION_RATE_LIMIT_DELAY_MS;
                         scheduler.schedule(() -> addAgreedReaction(reaction), delayMs, TimeUnit.MILLISECONDS);
+                    }
+                    for (int i = 0; i < retract.size(); i++) {
+                        PendingReaction reaction = retract.get(i);
+                        long delayMs = (agreed.size() + i) * REACTION_RATE_LIMIT_DELAY_MS;
+                        scheduler.schedule(() -> removeAgreedReaction(reaction), delayMs, TimeUnit.MILLISECONDS);
                     }
                 });
     }
@@ -1059,6 +1108,18 @@ public class MarkovListener extends ListenerAdapter {
                     MessageReaction existingReaction = message.getReaction(reaction.emoji);
                     if (existingReaction != null && !existingReaction.isSelf()) {
                         message.addReaction(reaction.emoji).queue();
+                    }
+                }, error -> {
+                });
+    }
+
+    private void removeAgreedReaction(PendingReaction reaction) {
+        reaction.channel
+                .retrieveMessageById(reaction.messageId)
+                .queue(message -> {
+                    MessageReaction existingReaction = message.getReaction(reaction.emoji);
+                    if (existingReaction != null && existingReaction.isSelf()) {
+                        message.removeReaction(reaction.emoji).queue();
                     }
                 }, error -> {
                 });
@@ -1086,6 +1147,9 @@ public class MarkovListener extends ListenerAdapter {
                 for (Map.Entry<String, PendingReaction> e : msg.reactions.entrySet()) {
                     existing.reactions.putIfAbsent(e.getKey(), e.getValue());
                 }
+                for (Map.Entry<String, PendingReaction> e : msg.ownReactions.entrySet()) {
+                    existing.ownReactions.putIfAbsent(e.getKey(), e.getValue());
+                }
             }
         }
     }
@@ -1098,12 +1162,38 @@ public class MarkovListener extends ListenerAdapter {
     }
 
     private Set<String> parseReactionCandidateIds(String reply) {
-        if (reply == null) return Set.of();
+        return parseReactionAddIds(reply);
+    }
 
+    static Set<String> parseReactionAddIds(String reply) {
+        return parseReactionIds(reply, true);
+    }
+
+    static Set<String> parseReactionRemoveIds(String reply) {
+        return parseReactionIds(reply, false);
+    }
+
+    private static Set<String> parseReactionIds(String reply, boolean add) {
+        if (reply == null) return Set.of();
         Set<String> ids = new LinkedHashSet<>();
-        Matcher matcher = Pattern.compile("\\br\\d+\\b", Pattern.CASE_INSENSITIVE).matcher(reply);
-        while (matcher.find()) {
-            ids.add(matcher.group().toLowerCase(Locale.ROOT));
+        // Token scan so ADD/REMOVE mode is honoured on one line
+        // ("ADD r1 REMOVE s1"). Bare legacy "r1,r2" defaults to ADD.
+        // s ids always mean retraction, r ids under REMOVE are ignored.
+        boolean removeMode = false;
+        for (String token : reply.split("[^A-Za-z0-9]+")) {
+            String t = token.toLowerCase(Locale.ROOT);
+            if (t.equals("remove") || t.equals("retract")) {
+                removeMode = true;
+                continue;
+            }
+            if (t.equals("add")) {
+                removeMode = false;
+                continue;
+            }
+            if (!t.matches("[rs]\\d+")) continue;
+            boolean isOwn = t.startsWith("s");
+            if (add && !isOwn && !removeMode) ids.add(t);
+            if (!add && isOwn) ids.add(t);
         }
         return ids;
     }
@@ -1616,6 +1706,7 @@ public class MarkovListener extends ListenerAdapter {
         private final long messageId;
         private final String content;
         private final LinkedHashMap<String, PendingReaction> reactions = new LinkedHashMap<>();
+        private final LinkedHashMap<String, PendingReaction> ownReactions = new LinkedHashMap<>();
 
         private PendingReactionMessage(MessageChannelUnion channel, long messageId, String content) {
             this.channel = channel;
