@@ -91,6 +91,16 @@ class PaseoReactionResponderTest {
     }
 
     @Test
+    void resolvesDuringResponseReactChoiceOnlyFromCandidates() {
+        // PendingReaction is private; verify through its public surface:
+        // an empty/unknown map yields null for any id.
+        assertEquals(null, MarkovListener.resolveReactChoice("r1", java.util.Map.of()));
+        assertEquals(null, MarkovListener.resolveReactChoice("", java.util.Map.of()));
+        assertEquals(null, MarkovListener.resolveReactChoice(null, java.util.Map.of()));
+        assertEquals(null, MarkovListener.resolveReactChoice("r1", null));
+    }
+
+    @Test
     void parsesAddAndRemove() {
         assertEquals(Set.of("r1", "r2"), MarkovListener.parseReactionAddIds("ADD r1,r2 REMOVE s1"));
         assertEquals(Set.of("s1"), MarkovListener.parseReactionRemoveIds("ADD r1,r2 REMOVE s1"));

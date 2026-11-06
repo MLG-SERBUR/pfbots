@@ -63,6 +63,10 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
             Answer only the triggering message, in the bot voice.
             Read the log and cached images only. No edits, commands, or contacting anyone.
             Return only through the reply schema. No vision marker, tool transcript, or reasoning.
+            ## Reaction
+            Set react to the chosen r id, or "" if none.
+            You may only choose a listed r candidate that already exists on an event message. Never invent a new reaction.
+            Use free judgment. No candidate is required.
             """;
     // Static, not per-instance: both bots share one JVM, and the startup
     // archive must run exactly once per bot start, not once per bot.
@@ -95,8 +99,19 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
         return systemPrompt;
     }
 
+    public record ReplyWithReact(String reply, String react) {
+    }
+
+    public CompletableFuture<ReplyWithReact> generateReplyWithReact(GenerativeAiRequest request) {
+        return generateReplyInternal(request);
+    }
+
     @Override
     public CompletableFuture<String> generateReply(GenerativeAiRequest request) {
+        return generateReplyInternal(request).thenApply(ReplyWithReact::reply);
+    }
+
+    private CompletableFuture<ReplyWithReact> generateReplyInternal(GenerativeAiRequest request) {
         String system = request.systemPromptOverride() != null ? request.systemPromptOverride() : systemPrompt;
         String prompt = String.join("\n", request.recentMessages());
         ObjectNode json = MAPPER.createObjectNode();
@@ -127,7 +142,7 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
         return CompletableFuture.supplyAsync(() -> runBridge(requestJson));
     }
 
-    private String runBridge(String requestJson) {
+    private ReplyWithReact runBridge(String requestJson) {
         try {
             Process process = new ProcessBuilder(bridgeCommand).start();
             process.getOutputStream().write(requestJson.getBytes(StandardCharsets.UTF_8));
@@ -143,7 +158,8 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
             if (reply.isBlank()) {
                 throw new IOException("Paseo bridge returned no reply");
             }
-            return reply;
+            String react = replyJson.path("react").asText("");
+            return new ReplyWithReact(reply, react == null ? "" : react.trim());
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new CompletionException(e);

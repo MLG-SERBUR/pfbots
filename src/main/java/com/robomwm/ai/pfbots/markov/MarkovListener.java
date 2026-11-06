@@ -591,6 +591,7 @@ public class MarkovListener extends ListenerAdapter {
                                 Message referencedMessage, PaseoDaemonResponder paseo) {
         List<ScheduledFuture<?>> typingTasks = startTypingIndefinite(event);
         String systemPrompt = resolvePrompt(paseo.getSystemPrompt(), event.getGuild());
+        Map<String, PendingReaction> reactCandidates = collectEventReactionCandidates(event.getMessage(), referencedMessage);
         StringBuilder prompt = new StringBuilder();
         prompt.append("Channel ID: ").append(channelId).append("\n");
         prompt.append("AI log: data/markov/").append(channelId).append("/ai.log");
@@ -603,6 +604,21 @@ public class MarkovListener extends ListenerAdapter {
         prompt.append("Triggering message: ").append(content).append("\n");
         if (referencedMessage != null) {
             prompt.append("Replying to: ").append(MarkovUtils.getDisplayNameContent(referencedMessage)).append("\n");
+        }
+        // During-response reacts are bundled in the same Paseo turn as the
+        // reply. Only existing reactions on event messages are listed, so
+        // the bot can mirror one but never invent a new emoji.
+        prompt.append("Reaction candidates (existing only):\n");
+        if (reactCandidates.isEmpty()) {
+            prompt.append("none. Leave react empty.\n");
+        } else {
+            for (Map.Entry<String, PendingReaction> entry : reactCandidates.entrySet()) {
+                prompt.append(entry.getKey())
+                        .append(" messageId=").append(entry.getValue().messageId())
+                        .append(" reaction=").append(entry.getValue().display())
+                        .append(" message=\"").append(sanitizeReactionPromptText(messageContentById(event, referencedMessage, entry.getValue().messageId()))).append("\"\n");
+            }
+            prompt.append("Choose at most one via react, or leave it empty.\n");
         }
 
         List<PendingImage> pending = new ArrayList<>();
@@ -628,9 +644,9 @@ public class MarkovListener extends ListenerAdapter {
                     }
                     return images;
                 })
-                .thenCompose(images -> paseo.generateReply(
+                .thenCompose(images -> paseo.generateReplyWithReact(
                         new GenerativeAiRequest(List.of(prompt.toString()), systemPrompt, images, channelId)))
-                .whenComplete((reply, error) -> {
+                .whenComplete((result, error) -> {
                     stopTyping(typingTasks);
                     if (error != null) {
                         logGenerativeAiFailure(channelId, error);
@@ -638,16 +654,21 @@ public class MarkovListener extends ListenerAdapter {
                         return;
                     }
                     String safeReply = escapeMassMentions(resolveGuildEmoji(event.getGuild(),
-                            sanitizeOutput(MarkovManager.stripBotPrefix(reply))));
+                            sanitizeOutput(MarkovManager.stripBotPrefix(result.reply()))));
                     if (safeReply == null || safeReply.trim().isEmpty()) {
                         logGenerativeAiFailure(channelId, new IllegalStateException("Paseo reply was empty"));
                         sendImmediateSeededMarkovReply(event, channelId, content);
                         return;
                     }
+                    PendingReaction chosenReact = resolveReactChoice(result.react(), reactCandidates);
                     event.getChannel().sendMessage(safeReply)
                             .setAllowedMentions(Collections.emptyList())
                             .queue(success -> {
                                 trackAiMessage(channelId, safeReply);
+                                if (chosenReact != null) {
+                                    // Human timing: react lands just after the reply posts.
+                                    scheduler.schedule(() -> addAgreedReaction(chosenReact), 350, TimeUnit.MILLISECONDS);
+                                }
                                 scheduleSecondReply(event, channelId, content);
                             });
                 });
@@ -1123,6 +1144,53 @@ public class MarkovListener extends ListenerAdapter {
                     }
                 }, error -> {
                 });
+    }
+
+    /**
+     * Existing-only candidates for a during-response react: every distinct
+     * reaction already on the triggering message or the message it replies
+     * to, in trigger-then-referenced order. Own reactions are excluded so
+     * the bot can only mirror, never re-add its own. r ids only exist here,
+     * so an unknown id from the agent resolves to null.
+     */
+    static Map<String, PendingReaction> collectEventReactionCandidates(Message trigger, Message referenced) {
+        Map<String, PendingReaction> candidates = new LinkedHashMap<>();
+        int n = 1;
+        Set<Long> seenMessages = new HashSet<>();
+        for (Message message : List.of(trigger, referenced)) {
+            if (message == null || !seenMessages.add(message.getIdLong())) continue;
+            for (MessageReaction reaction : message.getReactions()) {
+                if (reaction.isSelf()) continue;
+                String code;
+                String display;
+                try {
+                    code = reaction.getEmoji().getAsReactionCode();
+                    display = reaction.getEmoji().getFormatted();
+                } catch (Exception e) {
+                    continue;
+                }
+                if (code == null || code.isEmpty()) continue;
+                candidates.put("r" + n++, new PendingReaction(message.getChannel(), message.getIdLong(), display, reaction.getEmoji()));
+            }
+        }
+        return candidates;
+    }
+
+    static PendingReaction resolveReactChoice(String react, Map<String, PendingReaction> candidates) {
+        if (react == null || react.isBlank() || candidates == null || candidates.isEmpty()) return null;
+        Matcher matcher = Pattern.compile("\\br\\d+\\b", Pattern.CASE_INSENSITIVE).matcher(react);
+        if (!matcher.find()) return null;
+        return candidates.get(matcher.group().toLowerCase(Locale.ROOT));
+    }
+
+    private static String messageContentById(MessageReceivedEvent event, Message referenced, long messageId) {
+        if (event != null && event.getMessage() != null && event.getMessage().getIdLong() == messageId) {
+            return event.getMessage().getContentDisplay();
+        }
+        if (referenced != null && referenced.getIdLong() == messageId) {
+            return referenced.getContentDisplay();
+        }
+        return "";
     }
 
     private List<PendingReactionMessage> drainPendingReactionMessages(long channelId) {

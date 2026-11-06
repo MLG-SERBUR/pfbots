@@ -10,7 +10,9 @@
 // after a successful reply all but the newest 5 pfbots sessions in the
 // workspace are archived, so the last 5 tabs stay open. Failed turns
 // throw before that step, so their tabs stay for debugging.
-// Reply:   { reply: "<final chat reply>" }
+// Reply:   { reply: "<final chat reply>", react: "r1" | "" }
+// react is optional and empty when no reaction candidate was chosen.
+// Existing-only reaction candidates feed it; Java applies rN ids locally.
 // ponytail: images[].data is raw base64 from VisionImage, not a data URI, because
 // the SDK type carries mimeType separately. Verify against the live daemon if a
 // provider rejects it; the fallback is a data:<mime>;base64,<data> string.
@@ -128,7 +130,7 @@ try {
     images: req.images && req.images.length > 0 ? req.images : undefined,
     outputSchema: {
       type: "object",
-      properties: { reply: { type: "string" } },
+      properties: { reply: { type: "string" }, react: { type: "string" } },
       required: ["reply"],
       additionalProperties: false,
     },
@@ -148,11 +150,14 @@ try {
   // verbatim ("Plan mode — read-only. Next step was sending Discord
   // message..."). A non-schema answer is a failed turn, not a reply:
   // throw so Java falls back to Markov instead of posting agent
-  // meta-text to the channel.
+  // meta-text to the channel. react is optional: absent or non-string
+  // means no reaction.
   let reply = null;
+  let react = "";
   try {
     const parsed = JSON.parse(result.lastMessage);
     if (typeof parsed.reply === "string") reply = parsed.reply;
+    if (typeof parsed.react === "string") react = parsed.react;
   } catch {
     // Not schema JSON: fail, do not use raw text.
   }
@@ -168,7 +173,7 @@ try {
   } catch (err) {
     console.error(`Session prune failed: ${err && err.message ? err.message : err}`);
   }
-  process.stdout.write(JSON.stringify({ reply }) + "\n");
+  process.stdout.write(JSON.stringify({ reply, react }) + "\n");
 } catch (err) {
   console.error(String(err && err.message ? err.message : err));
   process.exitCode = 1;

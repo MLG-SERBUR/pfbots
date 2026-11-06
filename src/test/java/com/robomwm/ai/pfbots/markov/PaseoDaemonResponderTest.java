@@ -89,6 +89,28 @@ class PaseoDaemonResponderTest {
     }
 
     @Test
+    void returnsReactAlongsideReply(@TempDir Path dir) throws Exception {
+        Path capture = dir.resolve("request.json");
+        Path bridge = fakeBridge(dir, capture, "#!/bin/sh\ncat > CAPTURE\nprintf '{\"reply\":\"hi\",\"react\":\"r1\"}'\n");
+        PaseoDaemonResponder responder = new PaseoDaemonResponder(
+                List.of(bridge.toString()), "opencode/test-model", null);
+        PaseoDaemonResponder.ReplyWithReact result = responder.generateReplyWithReact(
+                new GenerativeAiRequest(List.of("hi"))).get();
+        assertEquals("hi", result.reply());
+        assertEquals("r1", result.react());
+    }
+
+    @Test
+    void missingReactDefaultsToEmpty(@TempDir Path dir) throws Exception {
+        Path capture = dir.resolve("request.json");
+        Path bridge = fakeBridge(dir, capture, "#!/bin/sh\ncat > CAPTURE\nprintf '{\"reply\":\"hi\"}'\n");
+        PaseoDaemonResponder responder = new PaseoDaemonResponder(
+                List.of(bridge.toString()), "opencode/test-model", null);
+        assertEquals("", responder.generateReplyWithReact(new GenerativeAiRequest(List.of("hi"))).get().react());
+        assertEquals("hi", responder.generateReply(new GenerativeAiRequest(List.of("hi"))).get());
+    }
+
+    @Test
     void emptyReplyFailsFuture(@TempDir Path dir) throws Exception {
         Path capture = dir.resolve("request.json");
         Path bridge = fakeBridge(dir, capture, "#!/bin/sh\ncat > CAPTURE\nprintf '{\"reply\":\"  \"}'\n");
