@@ -8,8 +8,8 @@
 // every existing pfbots session before creating the new one, clearing the
 // pile built up before this change. Sessions are archived on finish:
 // after a successful reply all but the newest 5 pfbots sessions in the
-// workspace are archived, so the last 5 tabs stay open. Failed turns
-// throw before that step, so their tabs stay for debugging.
+// workspace are archived, so the last 5 tabs stay open. Other failed turns
+// stay for debugging; exhausted-usage turns are stopped immediately.
 // Reply:   { reply: "<final chat reply>", react: "r1" | "" }
 // react is optional and empty when no reaction candidate was chosen.
 // Existing-only reaction candidates feed it; Java applies rN ids locally.
@@ -21,6 +21,11 @@ import { readFileSync } from "node:fs";
 
 const input = readFileSync(0, "utf-8");
 const req = JSON.parse(input);
+
+function isUsageLimitError(message) {
+  return /(?:free\s+usage\s+exceeded|usage\s+(?:limit|quota)\s+(?:exceeded|reached)|quota\s+(?:exceeded|exhausted)|insufficient\s+(?:credits|balance))/i
+    .test(message || "");
+}
 // System prompt comes complete from Java (the profile's
 // paseoSystemPrompt) and is used exactly as sent: no concatenation
 // here, no file read, no bridge-side instructions. That prompt is plain
@@ -51,8 +56,13 @@ const readAllow = { "*": "deny", [`${channelDir}/**`]: "allow", [`**/${channelDi
 const options = {
   permission: {
     read: readAllow,
-    glob: readAllow,
-    grep: readAllow,
+    // grep/glob permissions are matched against the regex/glob pattern,
+    // not the searched files, so they cannot be path-scoped. They are
+    // allowed and confinement comes from the workspace cwd below: the
+    // agent's working directory is this channel's dir, so a default
+    // search can only hit its own ai.log/images. read stays path-scoped.
+    glob: "allow",
+    grep: "allow",
     list: readAllow,
     edit: "deny",
     bash: "deny",
@@ -97,16 +107,19 @@ async function archiveSessions(ids) {
 let agent = null;
 try {
   await client.connect();
-  // One workspace per bot dir, not one per reply: client.agents.create
+  // One workspace per channel dir, not one per reply: client.agents.create
   // makes a fresh workspace behind every agent, which is why each reply
   // left a workspace behind. workspaces.open reuses the active workspace
   // for a directory or creates it, and workspace.agents.create then puts
   // each reply's session inside that same workspace. Sessions stay
   // separate (one per reply, archived after it finishes, tab closed);
-  // only the workspace is shared.
+  // only the workspace is shared. The workspace cwd is the channel dir
+  // itself, which is what confines default grep/glob searches to this
+  // channel's ai.log/images (see the permission map above). Java prompts
+  // use ai.log / images/... relative to it.
   // Old workspaces from before this change stay where they are; archive
   // them in the Paseo UI if you want them gone, this does not delete them.
-  const workspace = await client.workspaces.open({ cwd: req.cwd || "/tmp" });
+  const workspace = await client.workspaces.open({ cwd: `${req.cwd || "/tmp"}/${channelDir}` });
   if (req.archiveExisting) {
     // First reply after bot start: clear the pre-existing pile. The new
     // session is not created yet, so it cannot be caught in this archive.
@@ -136,11 +149,50 @@ try {
     },
     labels: { source: "pfbots" },
   });
-  // No timeout, by owner instruction: a wait deadline expiring does not
-  // cancel the agent, so keep waiting instead of treating it as failure.
-  let result = await agent.waitForFinish(600000);
-  while (result.status === "timeout") {
-    result = await agent.waitForFinish(600000);
+  let reportUsageLimit;
+  const usageLimitFailure = new Promise((resolve) => {
+    reportUsageLimit = (message) => resolve({ type: "usage_limit", message });
+  });
+  const timeline = agent.timeline.subscribe(({ event }) => {
+    const message = event.type === "turn_failed"
+      ? event.error
+      : event.type === "timeline" && event.item.type === "error"
+        ? event.item.message
+        : "";
+    if (isUsageLimitError(message)) reportUsageLimit(message);
+  });
+  let result;
+  try {
+    await timeline.ready;
+    const recent = await agent.timeline.refetch({ direction: "tail", limit: 100 });
+    const missedUsageLimit = recent.entries.find(({ item }) =>
+      item.type === "error" && isUsageLimitError(item.message));
+    if (missedUsageLimit) reportUsageLimit(missedUsageLimit.item.message);
+
+    while (true) {
+      const outcome = await Promise.race([
+        agent.waitForFinish(600000).then((finished) => ({ type: "result", finished })),
+        usageLimitFailure,
+      ]);
+      const usageLimitMessage = outcome.type === "usage_limit"
+        ? outcome.message
+        : isUsageLimitError(outcome.finished.error) ? outcome.finished.error : null;
+      if (usageLimitMessage) {
+        try {
+          await agent.archive();
+          agent = null;
+        } catch (archiveError) {
+          console.error(`Failed to stop quota-rejected Paseo agent: ${archiveError && archiveError.message ? archiveError.message : archiveError}`);
+        }
+        throw new Error(usageLimitMessage);
+      }
+      if (outcome.finished.status !== "timeout") {
+        result = outcome.finished;
+        break;
+      }
+    }
+  } finally {
+    await timeline.release();
   }
   if (result.status !== "idle" || !result.lastMessage) {
     throw new Error(result.error || `Paseo turn ended with status ${result.status} and no message`);
@@ -178,7 +230,7 @@ try {
   console.error(String(err && err.message ? err.message : err));
   process.exitCode = 1;
 } finally {
-  // Old sessions already archived in the prune above; failed turns
+  // Old sessions already archived in the prune above; other failed turns
   // reach here unarchived on purpose, so their tabs stay for debugging.
   try { await client.close(); } catch {}
 }

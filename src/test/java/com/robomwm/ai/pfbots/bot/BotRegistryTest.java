@@ -54,7 +54,7 @@ class BotRegistryTest {
                     profile.key() + " must define paseoSystemPrompt in code");
             assertTrue(profile.paseoSystemPrompt().contains(BotProfile.BOT_NAME_VARIABLE),
                     profile.key() + " paseoSystemPrompt must contain {{BOT_NAME}}");
-            assertTrue(profile.paseoSystemPrompt().contains("data/markov/<channelId>/ai.log"),
+            assertTrue(profile.paseoSystemPrompt().contains("ai.log"),
                     profile.key() + " paseoSystemPrompt must include the log instructions");
         }
         assertFalse(BotRegistry.MasterOEBot.paseoSystemPrompt().contains("paraokabot"));

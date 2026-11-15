@@ -122,11 +122,8 @@ public class BotMain {
                 continue;
             }
 
-            // Main replies only, toggled in code, not by env var (owner
-            // instruction). Paseo is the live path; the RoundRobin line below
-            // is the toggle back, and RoundRobinGenerativeAiResponder stays in
-            // the repo untouched. Model is still TBD: set PASEO_PROVIDER to
-            // "opencode/<model>" when the owner picks one.
+            // Paseo is primary for main replies; the configured provider chain
+            // handles Paseo failures before falling back to Markov.
             // Toggle back: replace the PaseoDaemonResponder line with:
             //   generativeAiResponder = new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
             // Paseo calls use the profile's paseoSystemPrompt, not the
@@ -136,6 +133,8 @@ public class BotMain {
                     List.of("node", "paseo-bridge/paseo-bridge.mjs"),
                     PASEO_PROVIDER, profile.paseoSystemPrompt());
             System.out.println("[" + profile.displayName() + "] Main replies via Paseo daemon: " + PASEO_PROVIDER);
+            GenerativeAiResponder aiFallbackResponder =
+                    new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
             // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
             RoundRobinGenerativeAiResponder visionResponder =
                     RoundRobinGenerativeAiResponder.visionResponder(aiConfig);
@@ -155,7 +154,7 @@ public class BotMain {
             boolean markovAvailable = false;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
-                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
+                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, aiFallbackResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                     break;
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -175,7 +174,7 @@ public class BotMain {
                 // pointless, so this second attempt is not retried on failure.
                 // A failed bot is skipped so the others still come online.
                 try {
-                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
+                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, aiFallbackResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                 } catch (LoginException | RuntimeException e) {
                     System.err.println("[" + profile.displayName() + "] Startup without MESSAGE_CONTENT failed, skipping: " + e);
                     continue;
@@ -217,6 +216,7 @@ public class BotMain {
     private static BootResult startBot(BotProfile profile, String token, boolean enableMessageContent,
                                         MarkovManager markovManager, MarkovConfig markovConfig,
                                         GenerativeAiResponder generativeAiResponder,
+                                        GenerativeAiResponder aiFallbackResponder,
                                         GenerativeAiResponder reactionResponder,
                                         ArliAiSecondChanceResponder secondChanceResponder,
                                         ArliAiCoordinator coordinator,
@@ -241,7 +241,7 @@ public class BotMain {
 
         if (enableMessageContent) {
             markovListener = new MarkovListener(markovManager, markovConfig, null, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator,
-                    profile.botTag(), profile.reactionPrompt(), profile.key(), visionResponder);
+                    profile.botTag(), profile.reactionPrompt(), profile.key(), visionResponder, aiFallbackResponder);
         }
 
         StartupProbe probe = new StartupProbe();

@@ -19,7 +19,8 @@ class PaseoDaemonResponderTest {
     void paseoInstructionsCoverLogImagesAndSchema() {
         String instructions = PaseoDaemonResponder.PASEO_INSTRUCTIONS;
         assertTrue(instructions != null && !instructions.isBlank());
-        assertTrue(instructions.contains("data/markov/<channelId>/ai.log"));
+        assertTrue(instructions.contains("ai.log"));
+        assertTrue(instructions.contains("images/<imageId>.<ext>"));
         assertTrue(instructions.contains("reply schema"));
         // Regression for the 2026-11-01 plan leak: the agent must return
         // a reply for Java to send, never present a plan or send itself,

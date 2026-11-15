@@ -42,6 +42,7 @@ public class MarkovListener extends ListenerAdapter {
     private final MarkovManager manager;
     private final MarkovConfig config;
     private final GenerativeAiResponder generativeAiResponder;
+    private final GenerativeAiResponder aiFallbackResponder;
     private final GenerativeAiResponder reactionResponder;
     private final GenerativeAiResponder secondChanceResponder;
     private final GenerativeAiResponder visionResponder;
@@ -235,11 +236,18 @@ public class MarkovListener extends ListenerAdapter {
 
     /** Full variant with an on-demand vision responder (vision models only). */
     public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey, GenerativeAiResponder visionResponder) {
+        this(manager, config, jda, generativeAiResponder, reactionResponder, secondChanceResponder,
+                coordinator, botTag, reactionPrompt, botKey, visionResponder, null);
+    }
+
+    /** Full variant with an on-demand vision responder and main-reply fallback chain. */
+    public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey, GenerativeAiResponder visionResponder, GenerativeAiResponder aiFallbackResponder) {
         this.manager = manager;
         this.config = config;
         this.jda = jda;
         this.botKey = (botKey == null || botKey.isBlank()) ? BotRegistry.MasterOEBot.key() : botKey;
         this.generativeAiResponder = generativeAiResponder;
+        this.aiFallbackResponder = aiFallbackResponder;
         this.reactionResponder = reactionResponder;
         this.secondChanceResponder = secondChanceResponder;
         this.visionResponder = visionResponder != null ? visionResponder : new PlaceholderGenerativeAiResponder();
@@ -594,13 +602,13 @@ public class MarkovListener extends ListenerAdapter {
         Map<String, PendingReaction> reactCandidates = collectEventReactionCandidates(event.getMessage(), referencedMessage);
         StringBuilder prompt = new StringBuilder();
         prompt.append("Channel ID: ").append(channelId).append("\n");
-        prompt.append("AI log: data/markov/").append(channelId).append("/ai.log");
+        prompt.append("AI log: ai.log");
         long aiLogLines = manager.countAiLogLines(channelId);
         if (aiLogLines >= 0) {
             prompt.append(" (").append(aiLogLines).append(" lines)");
         }
         prompt.append("\n");
-        prompt.append("Cached images: data/markov/").append(channelId).append("/images/<imageId>.<ext>\n");
+        prompt.append("Cached images: images/<imageId>.<ext>\n");
         prompt.append("Triggering message: ").append(content).append("\n");
         if (referencedMessage != null) {
             prompt.append("Replying to: ").append(MarkovUtils.getDisplayNameContent(referencedMessage)).append("\n");
@@ -649,15 +657,14 @@ public class MarkovListener extends ListenerAdapter {
                 .whenComplete((result, error) -> {
                     stopTyping(typingTasks);
                     if (error != null) {
-                        logGenerativeAiFailure(channelId, error);
-                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        fallbackFromPaseo(event, channelId, content, referencedMessage, error);
                         return;
                     }
                     String safeReply = escapeMassMentions(resolveGuildEmoji(event.getGuild(),
                             sanitizeOutput(MarkovManager.stripBotPrefix(result.reply()))));
                     if (safeReply == null || safeReply.trim().isEmpty()) {
-                        logGenerativeAiFailure(channelId, new IllegalStateException("Paseo reply was empty"));
-                        sendImmediateSeededMarkovReply(event, channelId, content);
+                        fallbackFromPaseo(event, channelId, content, referencedMessage,
+                                new IllegalStateException("Paseo reply was empty"));
                         return;
                     }
                     PendingReaction chosenReact = resolveReactChoice(result.react(), reactCandidates);
@@ -674,6 +681,17 @@ public class MarkovListener extends ListenerAdapter {
                 });
     }
 
+    private void fallbackFromPaseo(MessageReceivedEvent event, long channelId, String content,
+                                   Message referencedMessage, Throwable error) {
+        logGenerativeAiFailure(channelId, error);
+        if (aiFallbackResponder == null) {
+            sendImmediateSeededMarkovReply(event, channelId, content);
+            return;
+        }
+        System.out.println("Paseo reply failed in channel " + channelId + "; trying configured AI providers.");
+        sendConfiguredGenerativeAiReply(event, channelId, content, referencedMessage, aiFallbackResponder);
+    }
+
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
         // Paseo path only: no timeout (owner instruction), no history sent by
         // Java, no NEED_VISION marker. The agent reads data/markov logs itself
@@ -684,15 +702,20 @@ public class MarkovListener extends ListenerAdapter {
             sendPaseoReply(event, channelId, content, referencedMessage, paseo);
             return;
         }
+        sendConfiguredGenerativeAiReply(event, channelId, content, referencedMessage, generativeAiResponder);
+    }
+
+    private void sendConfiguredGenerativeAiReply(MessageReceivedEvent event, long channelId, String content,
+                                                 Message referencedMessage, GenerativeAiResponder responder) {
         TypingSession typing = new TypingSession(event, scheduler);
         typing.pulse();
 
         String rawSystemPrompt = null;
-        if (generativeAiResponder instanceof RoundRobinGenerativeAiResponder rr) {
+        if (responder instanceof RoundRobinGenerativeAiResponder rr) {
             rawSystemPrompt = resolvePrompt(rr.getSystemPrompt(), event.getGuild());
         }
         final String systemPrompt = rawSystemPrompt;
-        List<String> recentMessages = manager.getRecentMessagesForAiUntilTokenBudget(channelId, gatherBudgetFor(generativeAiResponder), systemPrompt);
+        List<String> recentMessages = manager.getRecentMessagesForAiUntilTokenBudget(channelId, gatherBudgetFor(responder), systemPrompt);
 
         if (referencedMessage != null && !recentMessages.isEmpty()) {
             List<PendingImage> refImages = imageAttachments(referencedMessage);
@@ -728,7 +751,7 @@ public class MarkovListener extends ListenerAdapter {
 
         CompletableFuture<String> replyFuture;
         try {
-            replyFuture = generativeAiResponder.generateReply(request);
+            replyFuture = responder.generateReply(request);
         } catch (Exception e) {
             typing.close();
             logGenerativeAiFailure(channelId, e);

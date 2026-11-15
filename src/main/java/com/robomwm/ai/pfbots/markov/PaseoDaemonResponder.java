@@ -42,11 +42,12 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
             Return it only through the reply schema. No plan, no sending.
             Do not load or use any skill.
 
-            Working directory is the bot directory, so relative paths work.
+            Working directory is this channel's log directory, so relative
+            paths work and searches are confined to it.
 
             ## History
             Java sends no history. Read it yourself, only as much as needed:
-            data/markov/<channelId>/ai.log
+            ai.log
             - <Author> message, newest last, no timestamps.
             - Bot lines get scrubbed over time; do not look for them elsewhere.
             Read the tail first; grep for a name, phrase, or image id only for older stuff.
@@ -54,7 +55,7 @@ public class PaseoDaemonResponder implements GenerativeAiResponder {
 
             ## Images
             Attached to this run: use them directly, do not guess.
-            Older: data/markov/<channelId>/images/<imageId>.<ext>
+            Older: images/<imageId>.<ext>
             Log line: <Author> some text [image id=1566657284933951498 file=photo.png]
             Open that cached file for an older image. If missing, say you cannot see it.
             Never describe it from the placeholder or an earlier image.
