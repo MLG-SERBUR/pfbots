@@ -23,7 +23,6 @@ import com.robomwm.ai.pfbots.markov.MarkovConfig;
 import com.robomwm.ai.pfbots.markov.MarkovListener;
 import com.robomwm.ai.pfbots.markov.MarkovManager;
 import com.robomwm.ai.pfbots.markov.PaseoDaemonResponder;
-import com.robomwm.ai.pfbots.markov.PaseoReactionResponder;
 import com.robomwm.ai.pfbots.markov.RoundRobinGenerativeAiResponder;
 import com.robomwm.ai.pfbots.masteroebot.MasterOEBotCommands;
 import com.robomwm.ai.pfbots.masteroebot.connect4.Connect4CommandListener;
@@ -138,14 +137,10 @@ public class BotMain {
             // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
             RoundRobinGenerativeAiResponder visionResponder =
                     RoundRobinGenerativeAiResponder.visionResponder(aiConfig);
-            // Reactions: Paseo primary (same r/s candidate data, mirror-only
-            // plus own-retraction), ArliAI as fallback inside the wrapper.
-            ArliAiReactionResponder arliReactionResponder =
+            // Reactions use ArliAI with recent channel history and candidate data.
+            GenerativeAiResponder reactionResponder =
                     new ArliAiReactionResponder(aiConfig, coordinator, profile.reactionPrompt());
-            GenerativeAiResponder reactionResponder = new PaseoReactionResponder(
-                    List.of("node", "paseo-bridge/paseo-bridge.mjs"),
-                    PASEO_PROVIDER, arliReactionResponder, profile.reactionPrompt());
-            System.out.println("[" + profile.displayName() + "] Reactions via Paseo daemon, ArliAI fallback: " + PASEO_PROVIDER);
+            System.out.println("[" + profile.displayName() + "] Reactions via ArliAI.");
             ArliAiSecondChanceResponder secondChanceResponder =
                     new ArliAiSecondChanceResponder(aiConfig, coordinator, profile.secondChancePrompt());
             System.out.println("[" + profile.displayName() + "] Loaded system prompt (" + profile.systemPrompt().length() + " chars).");

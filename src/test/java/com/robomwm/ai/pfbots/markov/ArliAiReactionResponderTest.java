@@ -82,6 +82,21 @@ class ArliAiReactionResponderTest {
     }
 
     @Test
+    void reactionPromptIncludesConversationHistoryBeforeCandidates() {
+        List<String> prompt = MarkovListener.reactionPromptWithHistory(
+                List.of("<Alice> that's wild", "<Bob> lol"),
+                List.of("Candidates:", "r1 reaction=😂 message=\"lol\""));
+
+        assertEquals(List.of(
+                "Recent conversation:",
+                "<Alice> that's wild",
+                "<Bob> lol",
+                "",
+                "Candidates:",
+                "r1 reaction=😂 message=\"lol\""), prompt);
+    }
+
+    @Test
     void orderedFallbackTriesNextArliModelOnFailure() {
         RecordingHttpClient client = new RecordingHttpClient();
         client.responseSequence.add(new StringResponse(null, 500, "Internal server error"));

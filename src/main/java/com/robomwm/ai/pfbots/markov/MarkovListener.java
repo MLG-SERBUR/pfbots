@@ -1046,15 +1046,15 @@ public class MarkovListener extends ListenerAdapter {
 
         Map<String, PendingReaction> candidatesById = new LinkedHashMap<>();
         Map<String, PendingReaction> ownById = new LinkedHashMap<>();
-        List<String> promptLines = new ArrayList<>();
-        promptLines.add("Candidates:");
+        List<String> candidateLines = new ArrayList<>();
+        candidateLines.add("Candidates:");
 
         int candidateNumber = 1;
         for (PendingReactionMessage message : pendingMessages) {
             for (PendingReaction reaction : message.reactions.values()) {
                 String candidateId = "r" + candidateNumber++;
                 candidatesById.put(candidateId, reaction.withMessage(message.channel, message.messageId));
-                promptLines.add(candidateId
+                candidateLines.add(candidateId
                         + " messageId=" + message.messageId
                         + " reaction=" + reaction.display
                         + " message=\"" + sanitizeReactionPromptText(message.content) + "\"");
@@ -1065,8 +1065,8 @@ public class MarkovListener extends ListenerAdapter {
             for (PendingReaction reaction : message.ownReactions.values()) {
                 String ownId = "s" + ownNumber++;
                 ownById.put(ownId, reaction.withMessage(message.channel, message.messageId));
-                if (ownNumber == 2) promptLines.add("Own reactions (retract with REMOVE):");
-                promptLines.add(ownId
+                if (ownNumber == 2) candidateLines.add("Own reactions (retract with REMOVE):");
+                candidateLines.add(ownId
                         + " messageId=" + message.messageId
                         + " reaction=" + reaction.display
                         + " message=\"" + sanitizeReactionPromptText(message.content) + "\"");
@@ -1075,9 +1075,11 @@ public class MarkovListener extends ListenerAdapter {
 
         if (candidatesById.isEmpty() && ownById.isEmpty()) return;
 
-        // channelId is required by Paseo for read confinement; messageIds
-        // stay in the prompt lines only as mapping context for the r/s ids.
-        GenerativeAiRequest request = new GenerativeAiRequest(promptLines, resolvePrompt(reactionPrompt, guildForChannel(channelId)), List.of(), channelId);
+        String systemPrompt = resolvePrompt(reactionPrompt, guildForChannel(channelId));
+        List<String> history = manager.getRecentMessagesForAiUntilTokenBudget(
+                channelId, gatherBudgetFor(responderToUse), systemPrompt);
+        List<String> promptLines = reactionPromptWithHistory(history, candidateLines);
+        GenerativeAiRequest request = new GenerativeAiRequest(promptLines, systemPrompt, List.of(), channelId);
         CompletableFuture<String> reactionFuture;
         try {
             reactionFuture = responderToUse.generateReply(request);
@@ -1143,6 +1145,17 @@ public class MarkovListener extends ListenerAdapter {
                         scheduler.schedule(() -> removeAgreedReaction(reaction), delayMs, TimeUnit.MILLISECONDS);
                     }
                 });
+    }
+
+    static List<String> reactionPromptWithHistory(List<String> history, List<String> candidateLines) {
+        List<String> promptLines = new ArrayList<>();
+        if (history != null && !history.isEmpty()) {
+            promptLines.add("Recent conversation:");
+            promptLines.addAll(history);
+            promptLines.add("");
+        }
+        promptLines.addAll(candidateLines);
+        return promptLines;
     }
 
     private void addAgreedReaction(PendingReaction reaction) {
