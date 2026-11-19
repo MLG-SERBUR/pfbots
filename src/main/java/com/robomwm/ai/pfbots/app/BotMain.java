@@ -41,8 +41,8 @@ import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
 public class BotMain {
-    /** Paseo provider/model for main replies. GLM-5.3 Flash Free, limited-time free in OpenCode. */
-    private static final String PASEO_PROVIDER = "opencode/glm-5.3-flash-free";
+    /** Paseo provider/model for image-priority replies. */
+    private static final String PASEO_PROVIDER = "opencode/hy4-flash-free";
 
     public static void main(String[] args) {
         try {
@@ -121,19 +121,12 @@ public class BotMain {
                 continue;
             }
 
-            // Paseo is primary for main replies; the configured provider chain
-            // handles Paseo failures before falling back to Markov.
-            // Toggle back: replace the PaseoDaemonResponder line with:
-            //   generativeAiResponder = new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
-            // Paseo calls use the profile's paseoSystemPrompt, not the
-            // profile system prompt and not a bridge concatenation: the
-            // bridge sends it exactly as Java gives it.
-            GenerativeAiResponder generativeAiResponder = new PaseoDaemonResponder(
+            GenerativeAiResponder generativeAiResponder =
+                    new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
+            System.out.println("[" + profile.displayName() + "] Main replies via configured AI providers.");
+            GenerativeAiResponder paseoResponder = new PaseoDaemonResponder(
                     List.of("node", "paseo-bridge/paseo-bridge.mjs"),
                     PASEO_PROVIDER, profile.paseoSystemPrompt());
-            System.out.println("[" + profile.displayName() + "] Main replies via Paseo daemon: " + PASEO_PROVIDER);
-            GenerativeAiResponder aiFallbackResponder =
-                    new RoundRobinGenerativeAiResponder(aiConfig, profile.systemPrompt());
             // Vision models only, for on-demand NEED_VISION calls in MarkovListener.
             RoundRobinGenerativeAiResponder visionResponder =
                     RoundRobinGenerativeAiResponder.visionResponder(aiConfig);
@@ -149,7 +142,7 @@ public class BotMain {
             boolean markovAvailable = false;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
-                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, aiFallbackResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
+                    boot = startBot(profile, token, true, markovManager, markovConfig, generativeAiResponder, paseoResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                     break;
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -169,7 +162,7 @@ public class BotMain {
                 // pointless, so this second attempt is not retried on failure.
                 // A failed bot is skipped so the others still come online.
                 try {
-                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, aiFallbackResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
+                    boot = startBot(profile, token, false, markovManager, markovConfig, generativeAiResponder, paseoResponder, reactionResponder, secondChanceResponder, coordinator, visionResponder);
                 } catch (LoginException | RuntimeException e) {
                     System.err.println("[" + profile.displayName() + "] Startup without MESSAGE_CONTENT failed, skipping: " + e);
                     continue;
@@ -211,7 +204,7 @@ public class BotMain {
     private static BootResult startBot(BotProfile profile, String token, boolean enableMessageContent,
                                         MarkovManager markovManager, MarkovConfig markovConfig,
                                         GenerativeAiResponder generativeAiResponder,
-                                        GenerativeAiResponder aiFallbackResponder,
+                                        GenerativeAiResponder paseoResponder,
                                         GenerativeAiResponder reactionResponder,
                                         ArliAiSecondChanceResponder secondChanceResponder,
                                         ArliAiCoordinator coordinator,
@@ -236,7 +229,7 @@ public class BotMain {
 
         if (enableMessageContent) {
             markovListener = new MarkovListener(markovManager, markovConfig, null, generativeAiResponder, reactionResponder, secondChanceResponder, coordinator,
-                    profile.botTag(), profile.reactionPrompt(), profile.key(), visionResponder, aiFallbackResponder);
+                    profile.botTag(), profile.reactionPrompt(), profile.key(), visionResponder, paseoResponder);
         }
 
         StartupProbe probe = new StartupProbe();

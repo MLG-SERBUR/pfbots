@@ -42,10 +42,10 @@ public class MarkovListener extends ListenerAdapter {
     private final MarkovManager manager;
     private final MarkovConfig config;
     private final GenerativeAiResponder generativeAiResponder;
-    private final GenerativeAiResponder aiFallbackResponder;
     private final GenerativeAiResponder reactionResponder;
     private final GenerativeAiResponder secondChanceResponder;
     private final GenerativeAiResponder visionResponder;
+    private final GenerativeAiResponder paseoResponder;
     private final HttpClient imageClient;
     private final ArliAiCoordinator coordinator;
     private final String botTag;
@@ -176,6 +176,9 @@ public class MarkovListener extends ListenerAdapter {
     private static final Pattern MENTION_PATTERN = Pattern.compile("<@!?\\d+>|<@&\\d+>|<#\\d+>");
     private static final Pattern CUSTOM_EMOJI_PATTERN = Pattern.compile("(<a?:([A-Za-z0-9_]{2,32}):(\\d+)>)|(:([A-Za-z0-9_]{2,32}):(\\d+)?)");
     private static final long RESPONSE_DAMPENING_WINDOW_MS = TimeUnit.SECONDS.toMillis(10);
+    static final int PASEO_RECENT_MESSAGE_WINDOW = 10;
+    private static final Pattern IMAGE_QUESTION_PATTERN =
+            Pattern.compile("\\b(image|photo|picture|pic|screenshot|meme)\\b", Pattern.CASE_INSENSITIVE);
     private static final int RESPONSE_DAMPENING_FREE_MESSAGES = 2;
     private static final double RESPONSE_DAMPENING_STEP = 0.1;
     private static final double MIN_RESPONSE_CHANCE = 0.0;
@@ -240,14 +243,14 @@ public class MarkovListener extends ListenerAdapter {
                 coordinator, botTag, reactionPrompt, botKey, visionResponder, null);
     }
 
-    /** Full variant with an on-demand vision responder and main-reply fallback chain. */
-    public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey, GenerativeAiResponder visionResponder, GenerativeAiResponder aiFallbackResponder) {
+    /** Full variant with an on-demand vision responder and optional image-priority Paseo responder. */
+    public MarkovListener(MarkovManager manager, MarkovConfig config, JDA jda, GenerativeAiResponder generativeAiResponder, GenerativeAiResponder reactionResponder, GenerativeAiResponder secondChanceResponder, ArliAiCoordinator coordinator, String botTag, String reactionPrompt, String botKey, GenerativeAiResponder visionResponder, GenerativeAiResponder paseoResponder) {
         this.manager = manager;
         this.config = config;
         this.jda = jda;
         this.botKey = (botKey == null || botKey.isBlank()) ? BotRegistry.MasterOEBot.key() : botKey;
         this.generativeAiResponder = generativeAiResponder;
-        this.aiFallbackResponder = aiFallbackResponder;
+        this.paseoResponder = paseoResponder;
         this.reactionResponder = reactionResponder;
         this.secondChanceResponder = secondChanceResponder;
         this.visionResponder = visionResponder != null ? visionResponder : new PlaceholderGenerativeAiResponder();
@@ -684,25 +687,42 @@ public class MarkovListener extends ListenerAdapter {
     private void fallbackFromPaseo(MessageReceivedEvent event, long channelId, String content,
                                    Message referencedMessage, Throwable error) {
         logGenerativeAiFailure(channelId, error);
-        if (aiFallbackResponder == null) {
+        if (generativeAiResponder == null) {
             sendImmediateSeededMarkovReply(event, channelId, content);
             return;
         }
         System.out.println("Paseo reply failed in channel " + channelId + "; trying configured AI providers.");
-        sendConfiguredGenerativeAiReply(event, channelId, content, referencedMessage, aiFallbackResponder);
+        sendConfiguredGenerativeAiReply(event, channelId, content, referencedMessage, generativeAiResponder);
     }
 
     private void sendGenerativeAiReplyWithFallback(MessageReceivedEvent event, long channelId, String content, Message referencedMessage) {
-        // Paseo path only: no timeout (owner instruction), no history sent by
-        // Java, no NEED_VISION marker. The agent reads data/markov logs itself
-        // per the profile's paseoSystemPrompt, and triggering/referenced
-        // images are attached natively via the SDK. Second-chance and
-        // reaction paths are untouched and keep their own timeouts.
-        if (generativeAiResponder instanceof PaseoDaemonResponder paseo) {
+        if (paseoResponder instanceof PaseoDaemonResponder paseo
+                && shouldUsePaseo(event, channelId, content, referencedMessage)) {
             sendPaseoReply(event, channelId, content, referencedMessage, paseo);
             return;
         }
         sendConfiguredGenerativeAiReply(event, channelId, content, referencedMessage, generativeAiResponder);
+    }
+
+    static boolean shouldUsePaseo(boolean messageFromBot, boolean hasCurrentImage, boolean repliesToAttachment,
+                                  String content, List<String> recentMessages) {
+        if (messageFromBot) return false;
+        if (hasCurrentImage || repliesToAttachment
+                || (content != null && IMAGE_QUESTION_PATTERN.matcher(content).find())) {
+            return true;
+        }
+        return recentMessages != null && recentMessages.stream()
+                .anyMatch(line -> line != null && line.toLowerCase(Locale.ROOT).contains("[image id="));
+    }
+
+    private boolean shouldUsePaseo(MessageReceivedEvent event, long channelId, String content,
+                                   Message referencedMessage) {
+        List<String> recentMessages = manager.getRecentMessagesForAi(channelId, PASEO_RECENT_MESSAGE_WINDOW);
+        boolean hasCurrentImage = !imageAttachments(event.getMessage()).isEmpty();
+        boolean repliesToAttachment = referencedMessage != null
+                && referencedMessage.getAttachments() != null
+                && !referencedMessage.getAttachments().isEmpty();
+        return shouldUsePaseo(event.getAuthor().isBot(), hasCurrentImage, repliesToAttachment, content, recentMessages);
     }
 
     private void sendConfiguredGenerativeAiReply(MessageReceivedEvent event, long channelId, String content,

@@ -2,6 +2,8 @@ package com.robomwm.ai.pfbots.markov;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -82,6 +84,16 @@ class VisionOnDemandTest {
     void imagePlaceholderCarriesIdForMarker() {
         MarkovListener.PendingImage image = new MarkovListener.PendingImage("12345", "pic.png", "image/png", 100, "https://example.invalid/pic.png");
         assertEquals("[image id=12345 file=pic.png]", MarkovListener.imagePlaceholder(image));
+    }
+
+    @Test
+    void paseoIsPreferredForImageCuesButNotBotMessages() {
+        assertTrue(MarkovListener.shouldUsePaseo(false, true, false, "look", List.of()));
+        assertTrue(MarkovListener.shouldUsePaseo(false, false, true, "look", List.of()));
+        assertTrue(MarkovListener.shouldUsePaseo(false, false, false, "what is in this picture?", List.of()));
+        assertTrue(MarkovListener.shouldUsePaseo(false, false, false, "hello", List.of("<user> [image id=123 file=pic.png]")));
+        assertFalse(MarkovListener.shouldUsePaseo(false, false, false, "hello", List.of()));
+        assertFalse(MarkovListener.shouldUsePaseo(true, true, true, "what is in this image?", List.of()));
     }
 
     @Test
